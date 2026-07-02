@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "settings": {
+    "orientation": "landscape",
+    "fitMode": "contain",
+    "background": "#000000",
+    "keepScreenOn": true,
+    "hideSystemUi": true,
+    "mute": true
+  },
+  "playlist": [
+    {
+      "type": "image",
+      "file": "media/test_image.png",
+      "duration": 8,
+      "fitMode": "contain"
+    },
+    {
+      "type": "video",
+      "file": "media/test_video.mp4",
+      "fitMode": "contain"
+    }
+  ]
+}
