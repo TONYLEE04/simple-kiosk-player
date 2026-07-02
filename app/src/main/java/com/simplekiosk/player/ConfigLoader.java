@@ -10,16 +10,27 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 final class ConfigLoader {
     private final File baseDir;
+    private final File configFile;
 
     ConfigLoader(File baseDir) {
         this.baseDir = baseDir;
+        this.configFile = new File(baseDir, "config.json");
+    }
+
+    File getConfigFile() {
+        return configFile;
+    }
+
+    long getConfigLastModified() {
+        return configFile.exists() ? configFile.lastModified() : 0L;
     }
 
     PlayerConfig load() throws IOException, JSONException, ConfigException {
-        File configFile = new File(baseDir, "config.json");
         if (!configFile.exists()) {
             throw new ConfigException("Missing config file: " + configFile.getAbsolutePath());
         }
@@ -32,10 +43,19 @@ final class ConfigLoader {
 
         PlayerConfig config = new PlayerConfig();
         readSettings(root.optJSONObject("settings"), config);
-        readPlaylist(root.optJSONArray("playlist"), config);
 
-        if (config.playlist.isEmpty()) {
-            throw new ConfigException("Playlist is empty");
+        JSONArray playlist = root.optJSONArray("playlist");
+        if (playlist != null) {
+            config.playlist.addAll(readPlaylist(playlist, config.fitMode, "playlist"));
+        }
+
+        JSONArray schedules = root.optJSONArray("schedules");
+        if (schedules != null) {
+            readSchedules(schedules, config);
+        }
+
+        if (config.playlist.isEmpty() && config.schedules.isEmpty()) {
+            throw new ConfigException("Config must contain playlist or schedules");
         }
         return config;
     }
@@ -61,35 +81,76 @@ final class ConfigLoader {
         }
     }
 
-    private void readPlaylist(JSONArray playlist, PlayerConfig config) throws JSONException, ConfigException {
-        if (playlist == null) {
-            throw new ConfigException("Missing playlist");
-        }
+    private void readSchedules(JSONArray schedules, PlayerConfig config) throws JSONException, ConfigException {
+        for (int i = 0; i < schedules.length(); i++) {
+            JSONObject item = schedules.getJSONObject(i);
+            String name = item.optString("name", "schedule-" + i);
+            String start = item.optString("start", "");
+            String end = item.optString("end", "");
+            int startMinute = parseMinuteOfDay(start, "schedules[" + i + "].start");
+            int endMinute = parseMinuteOfDay(end, "schedules[" + i + "].end");
 
+            JSONArray playlist = item.optJSONArray("playlist");
+            if (playlist == null) {
+                throw new ConfigException("Missing playlist for schedule: " + name);
+            }
+
+            ScheduleEntry schedule = new ScheduleEntry(name, startMinute, endMinute);
+            schedule.playlist.addAll(readPlaylist(playlist, config.fitMode,
+                    "schedules[" + i + "].playlist"));
+            if (schedule.playlist.isEmpty()) {
+                throw new ConfigException("Empty playlist for schedule: " + name);
+            }
+            config.schedules.add(schedule);
+        }
+    }
+
+    private List<PlaylistItem> readPlaylist(JSONArray playlist, String defaultFitMode, String fieldName)
+            throws JSONException, ConfigException {
+        List<PlaylistItem> items = new ArrayList<PlaylistItem>();
         for (int i = 0; i < playlist.length(); i++) {
             JSONObject item = playlist.getJSONObject(i);
             String type = item.optString("type", "");
             if (!PlaylistItem.TYPE_IMAGE.equals(type) && !PlaylistItem.TYPE_VIDEO.equals(type)) {
-                throw new ConfigException("Invalid playlist item type at index " + i + ": " + type);
+                throw new ConfigException("Invalid item type at " + fieldName + "[" + i + "]: " + type);
             }
 
             String filePath = item.optString("file", "");
             if (filePath.length() == 0) {
-                throw new ConfigException("Missing file for playlist item at index " + i);
+                throw new ConfigException("Missing file at " + fieldName + "[" + i + "]");
             }
 
             int durationSeconds = item.optInt("duration", 8);
             if (PlaylistItem.TYPE_IMAGE.equals(type) && durationSeconds <= 0) {
-                throw new ConfigException("Image duration must be greater than zero at index " + i);
+                throw new ConfigException("Image duration must be greater than zero at "
+                        + fieldName + "[" + i + "]");
             }
 
-            String fitMode = readFitMode(item.optString("fitMode", config.fitMode), "playlist[" + i + "].fitMode");
+            String fitMode = readFitMode(item.optString("fitMode", defaultFitMode),
+                    fieldName + "[" + i + "].fitMode");
             File mediaFile = new File(baseDir, filePath);
             if (!mediaFile.exists()) {
                 throw new ConfigException("Missing media file: " + mediaFile.getAbsolutePath());
             }
 
-            config.playlist.add(new PlaylistItem(type, mediaFile, durationSeconds, fitMode));
+            items.add(new PlaylistItem(type, mediaFile, durationSeconds, fitMode));
+        }
+        return items;
+    }
+
+    private int parseMinuteOfDay(String value, String fieldName) throws ConfigException {
+        if (value == null || value.length() != 5 || value.charAt(2) != ':') {
+            throw new ConfigException("Invalid time at " + fieldName + ": " + value);
+        }
+        try {
+            int hour = Integer.parseInt(value.substring(0, 2));
+            int minute = Integer.parseInt(value.substring(3, 5));
+            if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+                throw new ConfigException("Invalid time at " + fieldName + ": " + value);
+            }
+            return hour * 60 + minute;
+        } catch (NumberFormatException e) {
+            throw new ConfigException("Invalid time at " + fieldName + ": " + value);
         }
     }
 

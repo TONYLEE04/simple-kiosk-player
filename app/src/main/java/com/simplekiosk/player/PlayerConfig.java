@@ -1,6 +1,7 @@
 package com.simplekiosk.player;
 
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
 
 final class PlayerConfig {
@@ -16,11 +17,32 @@ final class PlayerConfig {
     boolean hideSystemUi = true;
     boolean mute = true;
     final List<PlaylistItem> playlist = new ArrayList<PlaylistItem>();
+    final List<ScheduleEntry> schedules = new ArrayList<ScheduleEntry>();
 
     static boolean isValidFitMode(String value) {
         return FIT_CONTAIN.equals(value)
                 || FIT_COVER.equals(value)
                 || FIT_STRETCH.equals(value)
                 || FIT_CENTER.equals(value);
+    }
+
+    List<PlaylistItem> getActivePlaylist(Calendar calendar) {
+        for (int i = 0; i < schedules.size(); i++) {
+            ScheduleEntry schedule = schedules.get(i);
+            if (schedule.isActive(calendar)) {
+                return schedule.playlist;
+            }
+        }
+        return playlist;
+    }
+
+    String getActivePlaylistName(Calendar calendar) {
+        for (int i = 0; i < schedules.size(); i++) {
+            ScheduleEntry schedule = schedules.get(i);
+            if (schedule.isActive(calendar)) {
+                return schedule.name;
+            }
+        }
+        return "default";
     }
 }

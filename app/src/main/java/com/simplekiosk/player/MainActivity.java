@@ -24,9 +24,13 @@ import android.widget.TextView;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Calendar;
+import java.util.List;
 
 public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
     private static final String BASE_DIR_NAME = "SimpleKiosk";
+    private static final long CONFIG_RELOAD_INTERVAL_MS = 5000L;
+    private static final long SCHEDULE_CHECK_INTERVAL_MS = 60000L;
 
     private final Handler handler = new Handler();
     private final Runnable nextRunnable = new Runnable() {
@@ -35,10 +39,28 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             playNext();
         }
     };
+    private final Runnable configReloadRunnable = new Runnable() {
+        @Override
+        public void run() {
+            checkConfigReload();
+            handler.postDelayed(this, CONFIG_RELOAD_INTERVAL_MS);
+        }
+    };
+    private final Runnable scheduleCheckRunnable = new Runnable() {
+        @Override
+        public void run() {
+            checkScheduleChange();
+            handler.postDelayed(this, SCHEDULE_CHECK_INTERVAL_MS);
+        }
+    };
 
     private File baseDir;
     private PlayerLog log;
+    private ConfigLoader configLoader;
     private PlayerConfig config;
+    private List<PlaylistItem> activePlaylist;
+    private String activePlaylistName = "";
+    private long configLastModified;
     private FrameLayout root;
     private ImageView imageView;
     private TextureView textureView;
@@ -57,6 +79,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
         baseDir = new File(Environment.getExternalStorageDirectory(), BASE_DIR_NAME);
         log = new PlayerLog(baseDir);
+        configLoader = new ConfigLoader(baseDir);
 
         buildViews();
         loadAndStart();
@@ -71,7 +94,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     @Override
     protected void onPause() {
         super.onPause();
-        handler.removeCallbacks(nextRunnable);
+        stopPlaybackTimers();
         releaseMediaPlayer();
     }
 
@@ -121,15 +144,88 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     private void loadAndStart() {
         try {
-            ConfigLoader loader = new ConfigLoader(baseDir);
-            config = loader.load();
+            config = configLoader.load();
+            configLastModified = configLoader.getConfigLastModified();
             applyConfig();
-            log.info("Loaded config with " + config.playlist.size() + " playlist items");
+            selectActivePlaylist(true, "initial load");
+            startPlaybackTimers();
+            log.info("Loaded config from " + configLoader.getConfigFile().getAbsolutePath());
             playNext();
         } catch (Exception e) {
             showError("Simple Kiosk config error\n\n" + e.getMessage());
             log.error("Could not load config", e);
         }
+    }
+
+    private void startPlaybackTimers() {
+        handler.removeCallbacks(configReloadRunnable);
+        handler.removeCallbacks(scheduleCheckRunnable);
+        handler.postDelayed(configReloadRunnable, CONFIG_RELOAD_INTERVAL_MS);
+        handler.postDelayed(scheduleCheckRunnable, SCHEDULE_CHECK_INTERVAL_MS);
+    }
+
+    private void stopPlaybackTimers() {
+        handler.removeCallbacks(nextRunnable);
+        handler.removeCallbacks(configReloadRunnable);
+        handler.removeCallbacks(scheduleCheckRunnable);
+    }
+
+    private void checkConfigReload() {
+        long lastModified = configLoader.getConfigLastModified();
+        if (lastModified == 0L || lastModified == configLastModified) {
+            return;
+        }
+
+        try {
+            PlayerConfig reloadedConfig = configLoader.load();
+            config = reloadedConfig;
+            configLastModified = lastModified;
+            applyConfig();
+            log.info("Reloaded config after file change");
+            selectActivePlaylist(true, "config reload");
+            playNext();
+        } catch (Exception e) {
+            log.error("Ignoring invalid hot-reloaded config", e);
+        }
+    }
+
+    private void checkScheduleChange() {
+        if (config == null || config.schedules.isEmpty()) {
+            return;
+        }
+        if (selectActivePlaylist(false, "schedule check")) {
+            playNext();
+        }
+    }
+
+    private boolean selectActivePlaylist(boolean forceReset, String reason) {
+        if (config == null) {
+            activePlaylist = null;
+            activePlaylistName = "";
+            return false;
+        }
+
+        Calendar now = Calendar.getInstance();
+        List<PlaylistItem> selectedPlaylist = config.getActivePlaylist(now);
+        String selectedName = config.getActivePlaylistName(now);
+        if (selectedPlaylist == null || selectedPlaylist.isEmpty()) {
+            activePlaylist = selectedPlaylist;
+            activePlaylistName = selectedName;
+            showError("No active playlist for current time");
+            log.error("No active playlist for current time");
+            return false;
+        }
+
+        boolean changed = forceReset || activePlaylist != selectedPlaylist
+                || !selectedName.equals(activePlaylistName);
+        if (changed) {
+            activePlaylist = selectedPlaylist;
+            activePlaylistName = selectedName;
+            playlistIndex = -1;
+            log.info("Selected playlist '" + activePlaylistName + "' by " + reason
+                    + " with " + activePlaylist.size() + " items");
+        }
+        return changed && !forceReset;
     }
 
     private void applyConfig() {
@@ -170,14 +266,22 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
 
-        if (config == null || config.playlist.isEmpty()) {
+        if (config == null) {
+            showError("Config is not loaded");
+            return;
+        }
+        if (activePlaylist == null || activePlaylist.isEmpty()) {
+            selectActivePlaylist(true, "playback");
+        }
+        if (activePlaylist == null || activePlaylist.isEmpty()) {
             showError("Playlist is empty");
             return;
         }
 
-        playlistIndex = (playlistIndex + 1) % config.playlist.size();
-        PlaylistItem item = config.playlist.get(playlistIndex);
-        log.info("Playing " + item.type + ": " + item.file.getAbsolutePath());
+        playlistIndex = (playlistIndex + 1) % activePlaylist.size();
+        PlaylistItem item = activePlaylist.get(playlistIndex);
+        log.info("Playing " + item.type + " from playlist '" + activePlaylistName + "': "
+                + item.file.getAbsolutePath());
 
         if (item.isImage()) {
             playImage(item);
@@ -342,6 +446,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 + " container=" + containerWidth + "x" + containerHeight
                 + " texture=" + params.width + "x" + params.height);
     }
+
     private void showError(String message) {
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
