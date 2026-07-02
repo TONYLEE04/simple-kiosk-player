@@ -67,6 +67,47 @@ Use `samples/scheduled-config.json` as the starting point for scheduled playback
 
 If `config.json` changes while the app is running, the app checks the file periodically and reloads a valid config automatically. Invalid hot-reloaded config is logged and ignored so the current playlist can continue running.
 
+
+## Local Maintenance View
+
+During playback, tap the top-left corner 5 times within 10 seconds to open the local maintenance view.
+
+The maintenance view currently shows:
+
+- App version
+- `/sdcard/SimpleKiosk/` paths
+- Config last modified time
+- Device Wi-Fi IP address
+- Current playback or silent mode
+- Active schedule and playlist state
+- Recent `logs/player.log` lines
+
+Available actions:
+
+- `Reload config`: reload `/sdcard/SimpleKiosk/config.json` immediately.
+- `Refresh`: refresh the displayed status and logs.
+- `Resume`: return to fullscreen playback.
+
+This is intentionally local-only. It prepares the same status and config flow that a future LAN-only settings page can reuse.
+
+## LAN Media Upload
+
+The maintenance view can start a temporary LAN management page.
+
+1. Open the local maintenance view from the tablet.
+2. Tap `Start LAN`.
+3. Open the shown URL from a phone or computer on the same Wi-Fi network, for example `http://192.168.1.23:8080/`.
+4. Upload JPG, PNG, or MP4 files from the browser.
+
+Uploaded files are saved to:
+
+```text
+/sdcard/SimpleKiosk/media/
+```
+
+The first LAN page is intentionally small. It can show status, logs, current config, media files, and upload media. Full graphical playlist editing will build on this later.
+
+The LAN service is off by default and stops when the app process exits. It is for trusted local networks only.
 ## Future Local Network Setup
 
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.
@@ -95,3 +136,6 @@ Supported `screen` values:
 `allowSleep` lets Android turn off the LCD backlight according to the system screen timeout. It does not immediately lock the screen and does not require Device Admin permission. When the next non-silent schedule starts, the app tries to wake by relaunching `MainActivity` and restoring `TURN_SCREEN_ON` / `KEEP_SCREEN_ON`.
 
 Use `samples/silent-scheduled-config.json` as the starting point.
+
+
+

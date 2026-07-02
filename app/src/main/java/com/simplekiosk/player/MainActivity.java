@@ -4,6 +4,10 @@ import android.app.Activity;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
@@ -23,21 +27,32 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
-public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
+public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener, ManagementServer.StatusProvider {
     private static final String BASE_DIR_NAME = "SimpleKiosk";
     private static final String ACTION_WAKE_PLAYBACK = "com.simplekiosk.player.WAKE_PLAYBACK";
     private static final int WAKE_ALARM_REQUEST_CODE = 1001;
     private static final long CONFIG_RELOAD_INTERVAL_MS = 5000L;
     private static final long SCHEDULE_CHECK_INTERVAL_MS = 60000L;
+    private static final int MAINTENANCE_TAP_COUNT = 5;
+    private static final long MAINTENANCE_TAP_WINDOW_MS = 10000L;
+    private static final int MANAGEMENT_PORT = 8080;
 
     private final Handler handler = new Handler();
     private final Runnable nextRunnable = new Runnable() {
@@ -74,6 +89,13 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private ImageView imageView;
     private TextureView textureView;
     private TextView errorView;
+    private FrameLayout maintenanceView;
+    private TextView maintenanceText;
+    private Button managementButton;
+    private ManagementServer managementServer;
+    private boolean maintenanceVisible;
+    private int maintenanceTapCount;
+    private long maintenanceFirstTapMs;
     private MediaPlayer mediaPlayer;
     private int playlistIndex = -1;
     private PlaylistItem pendingVideoItem;
@@ -89,6 +111,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         baseDir = new File(Environment.getExternalStorageDirectory(), BASE_DIR_NAME);
         log = new PlayerLog(baseDir);
         configLoader = new ConfigLoader(baseDir);
+        managementServer = new ManagementServer(MANAGEMENT_PORT, baseDir,
+                configLoader.getConfigFile(), log.getLogFile(), log, this);
 
         buildViews();
         loadAndStart();
@@ -120,6 +144,12 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
+        if (maintenanceVisible) {
+            return super.dispatchTouchEvent(event);
+        }
+        if (event.getAction() == MotionEvent.ACTION_UP && isMaintenanceTap(event)) {
+            registerMaintenanceTap();
+        }
         return true;
     }
 
@@ -153,9 +183,316 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         errorView.setVisibility(View.GONE);
         root.addView(errorView, fullScreenParams());
 
+        buildMaintenanceView();
         setContentView(root);
     }
 
+    private void buildMaintenanceView() {
+        maintenanceView = new FrameLayout(this);
+        maintenanceView.setBackgroundColor(0xee111111);
+        maintenanceView.setVisibility(View.GONE);
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(18), dp(18), dp(18), dp(18));
+        panel.setBackgroundColor(0xff202020);
+
+        TextView title = new TextView(this);
+        title.setText("Simple Kiosk Maintenance");
+        title.setTextColor(0xffffffff);
+        title.setTextSize(22);
+        title.setPadding(0, 0, 0, dp(12));
+        panel.addView(title, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setPadding(0, 0, 0, dp(12));
+
+        Button reloadButton = new Button(this);
+        reloadButton.setText("Reload config");
+        reloadButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                reloadConfigFromMaintenance();
+            }
+        });
+        buttons.addView(reloadButton, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button refreshButton = new Button(this);
+        refreshButton.setText("Refresh");
+        refreshButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                refreshMaintenanceText();
+            }
+        });
+        buttons.addView(refreshButton, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        managementButton = new Button(this);
+        managementButton.setText("Start LAN");
+        managementButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                toggleManagementServer();
+            }
+        });
+        buttons.addView(managementButton, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button closeButton = new Button(this);
+        closeButton.setText("Resume");
+        closeButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                hideMaintenanceView();
+            }
+        });
+        buttons.addView(closeButton, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        panel.addView(buttons, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        maintenanceText = new TextView(this);
+        maintenanceText.setTextColor(0xffeeeeee);
+        maintenanceText.setTextSize(14);
+        maintenanceText.setTypeface(android.graphics.Typeface.MONOSPACE);
+        maintenanceText.setPadding(0, 0, 0, dp(8));
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.addView(maintenanceText, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT));
+        panel.addView(scrollView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT);
+        panelParams.setMargins(dp(16), dp(16), dp(16), dp(16));
+        maintenanceView.addView(panel, panelParams);
+        root.addView(maintenanceView, fullScreenParams());
+    }
+
+    private boolean isMaintenanceTap(MotionEvent event) {
+        return event.getX() <= dp(96) && event.getY() <= dp(96);
+    }
+
+    private void registerMaintenanceTap() {
+        long now = System.currentTimeMillis();
+        if (maintenanceTapCount == 0 || now - maintenanceFirstTapMs > MAINTENANCE_TAP_WINDOW_MS) {
+            maintenanceFirstTapMs = now;
+            maintenanceTapCount = 1;
+        } else {
+            maintenanceTapCount++;
+        }
+        if (maintenanceTapCount >= MAINTENANCE_TAP_COUNT) {
+            maintenanceTapCount = 0;
+            showMaintenanceView();
+        }
+    }
+
+    private void showMaintenanceView() {
+        maintenanceVisible = true;
+        maintenanceView.setVisibility(View.VISIBLE);
+        root.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        refreshMaintenanceText();
+        log.info("Opened maintenance view");
+    }
+
+    private void hideMaintenanceView() {
+        maintenanceVisible = false;
+        maintenanceView.setVisibility(View.GONE);
+        applySystemUiFlags();
+        log.info("Closed maintenance view");
+    }
+
+    private void toggleManagementServer() {
+        if (managementServer == null) {
+            return;
+        }
+        if (managementServer.isRunning()) {
+            managementServer.stop();
+        } else {
+            try {
+                managementServer.start();
+            } catch (IOException e) {
+                log.error("Could not start LAN management server", e);
+            }
+        }
+        updateManagementButton();
+        refreshMaintenanceText();
+    }
+
+    private void updateManagementButton() {
+        if (managementButton == null || managementServer == null) {
+            return;
+        }
+        managementButton.setText(managementServer.isRunning() ? "Stop LAN" : "Start LAN");
+    }
+
+    private void reloadConfigFromMaintenance() {
+        try {
+            PlayerConfig reloadedConfig = configLoader.load();
+            config = reloadedConfig;
+            configLastModified = configLoader.getConfigLastModified();
+            applyConfig();
+            log.info("Reloaded config from maintenance view");
+            if (selectActivePlayback(true, "maintenance reload")) {
+                playNext();
+            }
+            maintenanceVisible = true;
+            maintenanceView.setVisibility(View.VISIBLE);
+            root.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+            refreshMaintenanceText();
+        } catch (Exception e) {
+            log.error("Maintenance config reload failed", e);
+            maintenanceText.setText("Config reload failed\n\n" + e.getMessage()
+                    + "\n\n" + buildStatusText());
+        }
+    }
+
+    private void refreshMaintenanceText() {
+        maintenanceText.setText(buildStatusText());
+    }
+
+    private String buildStatusText() {
+        StringBuilder builder = new StringBuilder();
+        appendLine(builder, "Version", getAppVersionName());
+        appendLine(builder, "Base dir", baseDir.getAbsolutePath());
+        appendLine(builder, "Config", configLoader.getConfigFile().getAbsolutePath());
+        appendLine(builder, "Config modified", configLastModified > 0L
+                ? new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(configLastModified))
+                : "unknown");
+        appendLine(builder, "Device IP", getDeviceIpAddress());
+        appendLine(builder, "Mode", activeSilent ? "silent" : "playback");
+        appendLine(builder, "Active playlist", activePlaylistName.length() > 0 ? activePlaylistName : "none");
+        appendLine(builder, "Playlist item", activePlaylist != null && !activePlaylist.isEmpty()
+                ? (playlistIndex + 1) + " / " + activePlaylist.size()
+                : "none");
+        if (activeSchedule != null) {
+            appendLine(builder, "Schedule", activeSchedule.name + " "
+                    + formatMinute(activeSchedule.startMinute) + "-"
+                    + formatMinute(activeSchedule.endMinute)
+                    + " mode=" + activeSchedule.mode
+                    + " screen=" + activeSchedule.screen);
+        } else {
+            appendLine(builder, "Schedule", "default");
+        }
+        if (config != null) {
+            appendLine(builder, "Settings", "fit=" + config.fitMode
+                    + " orientation=" + config.orientation
+                    + " keepScreenOn=" + config.keepScreenOn
+                    + " hideSystemUi=" + config.hideSystemUi
+                    + " mute=" + config.mute);
+            appendLine(builder, "Schedules", String.valueOf(config.schedules.size()));
+        } else {
+            appendLine(builder, "Settings", "config not loaded");
+        }
+
+        builder.append('\n');
+        builder.append("Recent log:\n");
+        builder.append(readRecentLogLines(18));
+        return builder.toString();
+    }
+
+    private void appendLine(StringBuilder builder, String label, String value) {
+        builder.append(label);
+        builder.append(": ");
+        builder.append(value);
+        builder.append('\n');
+    }
+
+    private String getAppVersionName() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return info.versionName + " (" + info.versionCode + ")";
+        } catch (PackageManager.NameNotFoundException e) {
+            return "unknown";
+        }
+    }
+
+    @Override
+    public String buildStatusTextForManagement() {
+        return buildStatusText();
+    }
+
+    private String getManagementServerStatus() {
+        if (managementServer == null || !managementServer.isRunning()) {
+            return "off";
+        }
+        return "on http://" + getDeviceIpAddress() + ":" + managementServer.getPort() + "/";
+    }
+
+    private String getDeviceIpAddress() {
+        try {
+            WifiManager wifiManager = (WifiManager) getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wifiManager == null) {
+                return "unavailable";
+            }
+            WifiInfo info = wifiManager.getConnectionInfo();
+            int ip = info != null ? info.getIpAddress() : 0;
+            if (ip == 0) {
+                return "not connected";
+            }
+            return (ip & 0xff) + "." + ((ip >> 8) & 0xff) + "."
+                    + ((ip >> 16) & 0xff) + "." + ((ip >> 24) & 0xff);
+        } catch (RuntimeException e) {
+            return "unavailable";
+        }
+    }
+
+    private String readRecentLogLines(int maxLines) {
+        File file = log.getLogFile();
+        if (!file.exists()) {
+            return "No log file yet\n";
+        }
+
+        String[] lines = new String[maxLines];
+        int count = 0;
+        BufferedReader reader = null;
+        try {
+            reader = new BufferedReader(new FileReader(file));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines[count % maxLines] = line;
+                count++;
+            }
+        } catch (IOException e) {
+            return "Could not read log: " + e.getMessage() + "\n";
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+
+        StringBuilder builder = new StringBuilder();
+        int start = Math.max(0, count - maxLines);
+        for (int i = start; i < count; i++) {
+            builder.append(lines[i % maxLines]);
+            builder.append('\n');
+        }
+        return builder.toString();
+    }
+
+    private String formatMinute(int minuteOfDay) {
+        int hour = minuteOfDay / 60;
+        int minute = minuteOfDay % 60;
+        return String.format(Locale.US, "%02d:%02d", hour, minute);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
     private FrameLayout.LayoutParams fullScreenParams() {
         return new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -679,3 +1016,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     public void onSurfaceTextureUpdated(SurfaceTexture surface) {
     }
 }
+
+
+
+
+

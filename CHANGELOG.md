@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 - 2026-07-03
+
+- Add a default-off LAN management server on port 8080.
+- Add maintenance controls to start and stop the LAN server.
+- Add browser pages for status, logs, current config, media list, and media upload.
+- Save uploaded JPG, PNG, and MP4 files into `/sdcard/SimpleKiosk/media/`.
+- Add `INTERNET` permission for the local HTTP server.
+
+## 0.3.0 - 2026-07-03
+
+- Add a local maintenance view opened by tapping the top-left corner 5 times within 10 seconds.
+- Show app version, config path, device Wi-Fi IP, active mode, active schedule, playlist state, and recent logs.
+- Add maintenance actions to reload config, refresh status, and resume playback.
+- Add `ACCESS_WIFI_STATE` only for displaying the local device IP address.
+
 ## 0.2.1 - 2026-07-03
 
 - Add silent schedules with `mode: "silent"`.
@@ -24,3 +39,8 @@
 - Loop playlists with image durations and video completion.
 - Run fullscreen with black background, hidden system UI, and keep-screen-on playback.
 - Show fullscreen errors and write logs to `/sdcard/SimpleKiosk/logs/player.log`.
+
+
+
+
+

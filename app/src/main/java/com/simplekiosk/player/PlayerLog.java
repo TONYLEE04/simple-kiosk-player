@@ -39,6 +39,10 @@ final class PlayerLog {
         write("ERROR", message, throwable);
     }
 
+    File getLogFile() {
+        return logFile;
+    }
+
     private synchronized void write(String level, String message, Throwable throwable) {
         FileWriter writer = null;
         try {
@@ -65,3 +69,4 @@ final class PlayerLog {
         }
     }
 }
+
