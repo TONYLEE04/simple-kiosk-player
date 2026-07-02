@@ -108,6 +108,25 @@ Uploaded files are saved to:
 The first LAN page is intentionally small. It can show status, logs, current config, media files, and upload media. Full graphical playlist editing will build on this later.
 
 The LAN service is off by default and stops when the app process exits. It is for trusted local networks only.
+
+## LAN Playlist Editor
+
+The LAN management page includes a basic graphical playlist editor.
+
+Current editor scope:
+
+- Shows files from `/sdcard/SimpleKiosk/media/`.
+- Adds media files to the top-level `playlist`.
+- Moves playlist items up and down.
+- Removes playlist items.
+- Sets item `type`, image-only `duration`, and `fitMode`.
+- Saves the updated JSON back to `/sdcard/SimpleKiosk/config.json`.
+
+The editor preserves existing `settings` and `schedules` fields when saving. It only rewrites the top-level `playlist`.
+
+Videos always play to completion. The duration field is shown only for image items.
+
+After saving, the normal config hot reload path applies the new playlist automatically if the config is valid.
 ## Future Local Network Setup
 
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.
@@ -136,6 +155,8 @@ Supported `screen` values:
 `allowSleep` lets Android turn off the LCD backlight according to the system screen timeout. It does not immediately lock the screen and does not require Device Admin permission. When the next non-silent schedule starts, the app tries to wake by relaunching `MainActivity` and restoring `TURN_SCREEN_ON` / `KEEP_SCREEN_ON`.
 
 Use `samples/silent-scheduled-config.json` as the starting point.
+
+
 
 
 

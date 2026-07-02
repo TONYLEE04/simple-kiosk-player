@@ -34,8 +34,11 @@ final class ConfigLoader {
         if (!configFile.exists()) {
             throw new ConfigException("Missing config file: " + configFile.getAbsolutePath());
         }
+        return loadFromText(readText(configFile));
+    }
 
-        JSONObject root = new JSONObject(readText(configFile));
+    PlayerConfig loadFromText(String jsonText) throws JSONException, ConfigException {
+        JSONObject root = new JSONObject(jsonText);
         int version = root.optInt("version", 0);
         if (version != 1) {
             throw new ConfigException("Unsupported config version: " + version);

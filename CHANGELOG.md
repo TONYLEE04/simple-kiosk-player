@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 - 2026-07-03
+
+- Add a graphical LAN playlist editor to the management page.
+- Add media-library-to-playlist actions, reorder controls, remove controls, image duration editing, and fit mode editing.
+- Add `POST /config` to validate and save `config.json` from the LAN page.
+- Preserve existing settings and schedules while updating the top-level playlist.
+- Back up the previous config to `config.json.bak` before replacing it.
+- Show video items as play-to-end in the GUI instead of exposing an unused duration field.
+
 ## 0.4.0 - 2026-07-03
 
 - Add a default-off LAN management server on port 8080.
@@ -39,6 +48,9 @@
 - Loop playlists with image durations and video completion.
 - Run fullscreen with black background, hidden system UI, and keep-screen-on playback.
 - Show fullscreen errors and write logs to `/sdcard/SimpleKiosk/logs/player.log`.
+
+
+
 
 
 
