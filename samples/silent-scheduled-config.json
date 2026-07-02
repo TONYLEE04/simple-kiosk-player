@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "settings": {
+    "orientation": "landscape",
+    "fitMode": "contain",
+    "background": "#000000",
+    "keepScreenOn": true,
+    "hideSystemUi": true,
+    "mute": true
+  },
+  "schedules": [
+    {
+      "name": "day",
+      "start": "08:00",
+      "end": "23:30",
+      "playlist": [
+        {
+          "type": "video",
+          "file": "media/day.mp4",
+          "fitMode": "cover"
+        }
+      ]
+    },
+    {
+      "name": "silent-night",
+      "start": "23:30",
+      "end": "08:00",
+      "mode": "silent",
+      "screen": "allowSleep"
+    }
+  ]
+}

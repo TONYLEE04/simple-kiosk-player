@@ -1,6 +1,10 @@
 package com.simplekiosk.player;
 
 import android.app.Activity;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -9,6 +13,7 @@ import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.PowerManager;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -29,6 +34,8 @@ import java.util.List;
 
 public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
     private static final String BASE_DIR_NAME = "SimpleKiosk";
+    private static final String ACTION_WAKE_PLAYBACK = "com.simplekiosk.player.WAKE_PLAYBACK";
+    private static final int WAKE_ALARM_REQUEST_CODE = 1001;
     private static final long CONFIG_RELOAD_INTERVAL_MS = 5000L;
     private static final long SCHEDULE_CHECK_INTERVAL_MS = 60000L;
 
@@ -59,7 +66,9 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private ConfigLoader configLoader;
     private PlayerConfig config;
     private List<PlaylistItem> activePlaylist;
+    private ScheduleEntry activeSchedule;
     private String activePlaylistName = "";
+    private boolean activeSilent;
     private long configLastModified;
     private FrameLayout root;
     private ImageView imageView;
@@ -83,6 +92,17 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
         buildViews();
         loadAndStart();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && ACTION_WAKE_PLAYBACK.equals(intent.getAction())) {
+            log.info("Received wake playback intent");
+            wakeScreenBriefly();
+            handleWakePlayback("wake alarm");
+        }
     }
 
     @Override
@@ -147,10 +167,11 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             config = configLoader.load();
             configLastModified = configLoader.getConfigLastModified();
             applyConfig();
-            selectActivePlaylist(true, "initial load");
             startPlaybackTimers();
             log.info("Loaded config from " + configLoader.getConfigFile().getAbsolutePath());
-            playNext();
+            if (selectActivePlayback(true, "initial load")) {
+                playNext();
+            }
         } catch (Exception e) {
             showError("Simple Kiosk config error\n\n" + e.getMessage());
             log.error("Could not load config", e);
@@ -182,8 +203,9 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             configLastModified = lastModified;
             applyConfig();
             log.info("Reloaded config after file change");
-            selectActivePlaylist(true, "config reload");
-            playNext();
+            if (selectActivePlayback(true, "config reload")) {
+                playNext();
+            }
         } catch (Exception e) {
             log.error("Ignoring invalid hot-reloaded config", e);
         }
@@ -193,39 +215,198 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         if (config == null || config.schedules.isEmpty()) {
             return;
         }
-        if (selectActivePlaylist(false, "schedule check")) {
+        if (selectActivePlayback(false, "schedule check")) {
             playNext();
         }
     }
 
-    private boolean selectActivePlaylist(boolean forceReset, String reason) {
+
+    private void wakeScreenBriefly() {
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
+                    PowerManager.FULL_WAKE_LOCK
+                            | PowerManager.ACQUIRE_CAUSES_WAKEUP
+                            | PowerManager.ON_AFTER_RELEASE,
+                    "SimpleKiosk:WakePlayback");
+            wakeLock.acquire(10000L);
+            log.info("Acquired wake playback wakelock");
+        } catch (RuntimeException e) {
+            log.error("Could not acquire wake playback wakelock", e);
+        }
+    }
+    private void handleWakePlayback(String reason) {
+        startPlaybackTimers();
+        if (config == null) {
+            loadAndStart();
+            return;
+        }
+        if (selectActivePlayback(false, reason)) {
+            playNext();
+        } else if (!activeSilent && activePlaylist != null && mediaPlayer == null) {
+            playNext();
+        }
+    }
+
+    private boolean selectActivePlayback(boolean forceReset, String reason) {
         if (config == null) {
             activePlaylist = null;
+            activeSchedule = null;
             activePlaylistName = "";
+            activeSilent = false;
             return false;
         }
 
         Calendar now = Calendar.getInstance();
-        List<PlaylistItem> selectedPlaylist = config.getActivePlaylist(now);
-        String selectedName = config.getActivePlaylistName(now);
+        ScheduleEntry selectedSchedule = config.getActiveSchedule(now);
+        if (selectedSchedule != null && selectedSchedule.isSilent()) {
+            boolean changed = forceReset || !activeSilent || activeSchedule != selectedSchedule;
+            if (changed) {
+                enterSilentMode(selectedSchedule, reason);
+            }
+            return false;
+        }
+
+        List<PlaylistItem> selectedPlaylist = selectedSchedule != null
+                ? selectedSchedule.playlist
+                : config.playlist;
+        String selectedName = selectedSchedule != null ? selectedSchedule.name : "default";
         if (selectedPlaylist == null || selectedPlaylist.isEmpty()) {
             activePlaylist = selectedPlaylist;
+            activeSchedule = selectedSchedule;
             activePlaylistName = selectedName;
+            activeSilent = false;
             showError("No active playlist for current time");
             log.error("No active playlist for current time");
             return false;
         }
 
-        boolean changed = forceReset || activePlaylist != selectedPlaylist
-                || !selectedName.equals(activePlaylistName);
+        boolean changed = forceReset || activeSilent || activeSchedule != selectedSchedule
+                || activePlaylist != selectedPlaylist || !selectedName.equals(activePlaylistName);
         if (changed) {
             activePlaylist = selectedPlaylist;
+            activeSchedule = selectedSchedule;
             activePlaylistName = selectedName;
+            activeSilent = false;
             playlistIndex = -1;
+            cancelWakeAlarm();
+            applyPlaybackScreenPolicy();
             log.info("Selected playlist '" + activePlaylistName + "' by " + reason
                     + " with " + activePlaylist.size() + " items");
         }
-        return changed && !forceReset;
+        return changed;
+    }
+
+    private void enterSilentMode(ScheduleEntry schedule, String reason) {
+        activePlaylist = null;
+        activeSchedule = schedule;
+        activePlaylistName = schedule.name;
+        activeSilent = true;
+        playlistIndex = -1;
+        pendingVideoItem = null;
+        handler.removeCallbacks(nextRunnable);
+        releaseMediaPlayer();
+
+        imageView.setImageDrawable(null);
+        imageView.setVisibility(View.GONE);
+        textureView.setVisibility(View.GONE);
+        errorView.setVisibility(View.GONE);
+        root.setBackgroundColor(0xff000000);
+
+        if (schedule.shouldAllowSleep()) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+            scheduleWakeAlarmForNextPlayback(schedule);
+        } else {
+            cancelWakeAlarm();
+            if (config.keepScreenOn) {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        }
+        applySystemUiFlags();
+        log.info("Selected silent schedule '" + schedule.name + "' by " + reason
+                + " screen=" + schedule.screen);
+    }
+
+    private void applyPlaybackScreenPolicy() {
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
+        if (config.keepScreenOn) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
+
+    private void scheduleWakeAlarmForNextPlayback(ScheduleEntry silentSchedule) {
+        long triggerAtMillis = calculateNextPlaybackWakeMillis(silentSchedule);
+        if (triggerAtMillis <= 0L) {
+            log.error("Could not calculate wake alarm for silent schedule: " + silentSchedule.name);
+            return;
+        }
+
+        AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        PendingIntent pendingIntent = createWakePendingIntent();
+        if (android.os.Build.VERSION.SDK_INT >= 19) {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent);
+        } else {
+            alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent);
+        }
+        log.info("Scheduled wake alarm at " + triggerAtMillis + " for silent schedule '"
+                + silentSchedule.name + "'");
+    }
+
+    private long calculateNextPlaybackWakeMillis(ScheduleEntry silentSchedule) {
+        Calendar now = Calendar.getInstance();
+        Calendar best = null;
+
+        if (config != null) {
+            for (int i = 0; i < config.schedules.size(); i++) {
+                ScheduleEntry schedule = config.schedules.get(i);
+                if (schedule.isSilent()) {
+                    continue;
+                }
+                Calendar candidate = calendarAtMinute(schedule.startMinute);
+                if (!candidate.after(now)) {
+                    candidate.add(Calendar.DATE, 1);
+                }
+                if (best == null || candidate.before(best)) {
+                    best = candidate;
+                }
+            }
+        }
+
+        if (best == null && config != null && !config.playlist.isEmpty()) {
+            best = calendarAtMinute(silentSchedule.endMinute);
+            if (!best.after(now)) {
+                best.add(Calendar.DATE, 1);
+            }
+        }
+
+        return best != null ? best.getTimeInMillis() : 0L;
+    }
+
+    private Calendar calendarAtMinute(int minuteOfDay) {
+        Calendar calendar = Calendar.getInstance();
+        calendar.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
+        calendar.set(Calendar.MINUTE, minuteOfDay % 60);
+        calendar.set(Calendar.SECOND, 0);
+        calendar.set(Calendar.MILLISECOND, 0);
+        return calendar;
+    }
+
+    private PendingIntent createWakePendingIntent() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setAction(ACTION_WAKE_PLAYBACK);
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(this, WAKE_ALARM_REQUEST_CODE, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    private void cancelWakeAlarm() {
+        AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        alarmManager.cancel(createWakePendingIntent());
     }
 
     private void applyConfig() {
@@ -237,10 +418,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         }
 
-        if (config.keepScreenOn) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        } else {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (!activeSilent) {
+            applyPlaybackScreenPolicy();
         }
 
         applySystemUiFlags();
@@ -270,8 +449,14 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             showError("Config is not loaded");
             return;
         }
+        if (activeSilent) {
+            return;
+        }
         if (activePlaylist == null || activePlaylist.isEmpty()) {
-            selectActivePlaylist(true, "playback");
+            selectActivePlayback(true, "playback");
+        }
+        if (activeSilent) {
+            return;
         }
         if (activePlaylist == null || activePlaylist.isEmpty()) {
             showError("Playlist is empty");
@@ -448,6 +633,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     }
 
     private void showError(String message) {
+        activeSilent = false;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         imageView.setImageDrawable(null);
@@ -471,14 +657,14 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-        if (pendingVideoItem != null) {
+        if (pendingVideoItem != null && !activeSilent) {
             startVideo(pendingVideoItem, surface);
         }
     }
 
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-        if (mediaPlayer != null && pendingVideoItem != null) {
+        if (mediaPlayer != null && pendingVideoItem != null && !activeSilent) {
             applyVideoTransform(mediaPlayer.getVideoWidth(), mediaPlayer.getVideoHeight(), pendingVideoItem.fitMode);
         }
     }

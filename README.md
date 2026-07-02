@@ -72,3 +72,26 @@ If `config.json` changes while the app is running, the app checks the file perio
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.
 
 A future LAN-only maintenance page should write the same config file and media directory instead of introducing a separate cloud or account system. This keeps playback offline-first and lets the existing hot reload path apply changes without restarting the app.
+
+## Silent Schedules
+
+Scheduled entries may use `mode: "silent"` to stop media playback for a time range.
+
+```json
+{
+  "name": "silent-night",
+  "start": "23:30",
+  "end": "08:00",
+  "mode": "silent",
+  "screen": "allowSleep"
+}
+```
+
+Supported `screen` values:
+
+- `black`: stop playback and show a black fullscreen view, keeping the normal screen-on policy.
+- `allowSleep`: stop playback, show black, clear `KEEP_SCREEN_ON`, and set an `AlarmManager.RTC_WAKEUP` alarm for the next playback window.
+
+`allowSleep` lets Android turn off the LCD backlight according to the system screen timeout. It does not immediately lock the screen and does not require Device Admin permission. When the next non-silent schedule starts, the app tries to wake by relaunching `MainActivity` and restoring `TURN_SCREEN_ON` / `KEEP_SCREEN_ON`.
+
+Use `samples/silent-scheduled-config.json` as the starting point.

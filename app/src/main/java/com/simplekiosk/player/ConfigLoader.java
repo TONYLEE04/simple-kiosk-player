@@ -89,13 +89,22 @@ final class ConfigLoader {
             String end = item.optString("end", "");
             int startMinute = parseMinuteOfDay(start, "schedules[" + i + "].start");
             int endMinute = parseMinuteOfDay(end, "schedules[" + i + "].end");
+            String mode = readScheduleMode(item.optString("mode", ScheduleEntry.MODE_PLAYLIST),
+                    "schedules[" + i + "].mode");
+            String screen = readScheduleScreen(item.optString("screen", ScheduleEntry.SCREEN_BLACK),
+                    "schedules[" + i + "].screen");
+
+            ScheduleEntry schedule = new ScheduleEntry(name, startMinute, endMinute, mode, screen);
+            if (schedule.isSilent()) {
+                config.schedules.add(schedule);
+                continue;
+            }
 
             JSONArray playlist = item.optJSONArray("playlist");
             if (playlist == null) {
                 throw new ConfigException("Missing playlist for schedule: " + name);
             }
 
-            ScheduleEntry schedule = new ScheduleEntry(name, startMinute, endMinute);
             schedule.playlist.addAll(readPlaylist(playlist, config.fitMode,
                     "schedules[" + i + "].playlist"));
             if (schedule.playlist.isEmpty()) {
@@ -154,6 +163,20 @@ final class ConfigLoader {
         }
     }
 
+
+    private String readScheduleMode(String value, String fieldName) throws ConfigException {
+        if (ScheduleEntry.MODE_PLAYLIST.equals(value) || ScheduleEntry.MODE_SILENT.equals(value)) {
+            return value;
+        }
+        throw new ConfigException("Invalid " + fieldName + ": " + value);
+    }
+
+    private String readScheduleScreen(String value, String fieldName) throws ConfigException {
+        if (ScheduleEntry.SCREEN_BLACK.equals(value) || ScheduleEntry.SCREEN_ALLOW_SLEEP.equals(value)) {
+            return value;
+        }
+        throw new ConfigException("Invalid " + fieldName + ": " + value);
+    }
     private String readFitMode(String value, String fieldName) throws ConfigException {
         if (!PlayerConfig.isValidFitMode(value)) {
             throw new ConfigException("Invalid " + fieldName + ": " + value);

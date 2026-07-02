@@ -26,22 +26,28 @@ final class PlayerConfig {
                 || FIT_CENTER.equals(value);
     }
 
-    List<PlaylistItem> getActivePlaylist(Calendar calendar) {
+    ScheduleEntry getActiveSchedule(Calendar calendar) {
         for (int i = 0; i < schedules.size(); i++) {
             ScheduleEntry schedule = schedules.get(i);
             if (schedule.isActive(calendar)) {
-                return schedule.playlist;
+                return schedule;
             }
+        }
+        return null;
+    }
+
+    List<PlaylistItem> getActivePlaylist(Calendar calendar) {
+        ScheduleEntry schedule = getActiveSchedule(calendar);
+        if (schedule != null) {
+            return schedule.playlist;
         }
         return playlist;
     }
 
     String getActivePlaylistName(Calendar calendar) {
-        for (int i = 0; i < schedules.size(); i++) {
-            ScheduleEntry schedule = schedules.get(i);
-            if (schedule.isActive(calendar)) {
-                return schedule.name;
-            }
+        ScheduleEntry schedule = getActiveSchedule(calendar);
+        if (schedule != null) {
+            return schedule.name;
         }
         return "default";
     }
