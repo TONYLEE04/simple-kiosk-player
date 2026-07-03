@@ -34,5 +34,17 @@
         }
       ]
     }
+  ],
+  "playlistPresets": [
+    {
+      "name": "day-loop",
+      "playlist": [
+        {
+          "type": "video",
+          "file": "media/day.mp4",
+          "fitMode": "cover"
+        }
+      ]
+    }
   ]
 }

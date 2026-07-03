@@ -53,6 +53,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private static final int MAINTENANCE_TAP_COUNT = 5;
     private static final long MAINTENANCE_TAP_WINDOW_MS = 10000L;
     private static final int MANAGEMENT_PORT = 8080;
+    private static final long BAD_ITEM_RETRY_DELAY_MS = 1000L;
 
     private final Handler handler = new Handler();
     private final Runnable nextRunnable = new Runnable() {
@@ -99,6 +100,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private MediaPlayer mediaPlayer;
     private int playlistIndex = -1;
     private PlaylistItem pendingVideoItem;
+    private Bitmap currentBitmap;
+    private int consecutivePlaybackFailures;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -140,6 +143,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         super.onPause();
         stopPlaybackTimers();
         releaseMediaPlayer();
+        clearCurrentBitmap();
     }
 
     @Override
@@ -513,9 +517,26 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 playNext();
             }
         } catch (Exception e) {
-            showError("Simple Kiosk config error\n\n" + e.getMessage());
+            config = null;
+            configLastModified = configLoader.getConfigLastModified();
+            startPlaybackTimers();
+            if (!configLoader.getConfigFile().exists()) {
+                showFirstRunGuide();
+            } else {
+                showError("Simple Kiosk config error\n\n" + e.getMessage()
+                        + "\n\nTap the top-left corner 5 times to open Maintenance.");
+            }
             log.error("Could not load config", e);
         }
+    }
+
+    private void showFirstRunGuide() {
+        showError("Simple Kiosk setup needed\n\n"
+                + "Missing config.json\n"
+                + configLoader.getConfigFile().getAbsolutePath()
+                + "\n\nTap the top-left corner 5 times within 10 seconds to open Maintenance.\n"
+                + "Tap Start LAN, then open the shown URL from a phone or computer on the same Wi-Fi.\n"
+                + "Upload media, create an all-day playlist schedule, and save config.json.");
     }
 
     private void startPlaybackTimers() {
@@ -557,9 +578,19 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
         if (selectActivePlayback(false, "schedule check")) {
             playNext();
+        } else if (!activeSilent && activePlaylist != null && !activePlaylist.isEmpty()
+                && !isPlaybackActive()) {
+            log.info("Restarting inactive playlist from schedule check");
+            playNext();
         }
     }
 
+    private boolean isPlaybackActive() {
+        return imageView.getVisibility() == View.VISIBLE
+                || textureView.getVisibility() == View.VISIBLE
+                || mediaPlayer != null
+                || pendingVideoItem != null;
+    }
 
     private void wakeScreenBriefly() {
         try {
@@ -629,6 +660,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             activePlaylistName = selectedName;
             activeSilent = false;
             playlistIndex = -1;
+            consecutivePlaybackFailures = 0;
             cancelWakeAlarm();
             applyPlaybackScreenPolicy();
             log.info("Selected playlist '" + activePlaylistName + "' by " + reason
@@ -643,9 +675,11 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         activePlaylistName = schedule.name;
         activeSilent = true;
         playlistIndex = -1;
+        consecutivePlaybackFailures = 0;
         pendingVideoItem = null;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
+        clearCurrentBitmap();
 
         imageView.setImageDrawable(null);
         imageView.setVisibility(View.GONE);
@@ -813,43 +847,53 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         } else if (item.isVideo()) {
             playVideo(item);
         } else {
-            showError("Unsupported playlist item type: " + item.type);
+            skipBadItem("Unsupported playlist item type: " + item.type,
+                    "Unsupported playlist item type: " + item.type, null);
         }
     }
 
     private void playImage(PlaylistItem item) {
         pendingVideoItem = null;
+        releaseMediaPlayer();
         textureView.setVisibility(View.GONE);
         errorView.setVisibility(View.GONE);
 
         Bitmap bitmap = decodeBitmapForScreen(item.file);
         if (bitmap == null) {
-            showError("Could not decode image\n\n" + item.file.getAbsolutePath());
-            log.error("Could not decode image: " + item.file.getAbsolutePath());
+            skipBadItem("Could not decode image\n\n" + item.file.getAbsolutePath(),
+                    "Could not decode image: " + item.file.getAbsolutePath(), null);
             return;
         }
 
+        clearCurrentBitmap();
+        currentBitmap = bitmap;
         imageView.setScaleType(scaleTypeForFitMode(item.fitMode));
         imageView.setImageBitmap(bitmap);
         imageView.setVisibility(View.VISIBLE);
+        consecutivePlaybackFailures = 0;
         handler.postDelayed(nextRunnable, item.durationSeconds * 1000L);
     }
 
     private Bitmap decodeBitmapForScreen(File file) {
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                return null;
+            }
+
+            DisplayMetrics metrics = getResources().getDisplayMetrics();
+            int targetWidth = root.getWidth() > 0 ? root.getWidth() : metrics.widthPixels;
+            int targetHeight = root.getHeight() > 0 ? root.getHeight() : metrics.heightPixels;
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
+            options.inPreferredConfig = Bitmap.Config.RGB_565;
+            return BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+        } catch (OutOfMemoryError e) {
+            log.error("Out of memory decoding image: " + file.getAbsolutePath());
             return null;
         }
-
-        DisplayMetrics metrics = getResources().getDisplayMetrics();
-        int targetWidth = root.getWidth() > 0 ? root.getWidth() : metrics.widthPixels;
-        int targetHeight = root.getHeight() > 0 ? root.getHeight() : metrics.heightPixels;
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
-        options.inPreferredConfig = Bitmap.Config.RGB_565;
-        return BitmapFactory.decodeFile(file.getAbsolutePath(), options);
     }
 
     private int calculateSampleSize(int width, int height, int targetWidth, int targetHeight) {
@@ -874,7 +918,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     }
 
     private void playVideo(PlaylistItem item) {
-        imageView.setImageDrawable(null);
+        clearCurrentBitmap();
         imageView.setVisibility(View.GONE);
         errorView.setVisibility(View.GONE);
         textureView.setVisibility(View.VISIBLE);
@@ -901,6 +945,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer preparedPlayer) {
+                    consecutivePlaybackFailures = 0;
                     applyVideoTransform(preparedPlayer.getVideoWidth(), preparedPlayer.getVideoHeight(), item.fitMode);
                     preparedPlayer.start();
                 }
@@ -914,21 +959,54 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 @Override
                 public boolean onError(MediaPlayer failedPlayer, int what, int extra) {
-                    showError("Video playback failed\n\n" + item.file.getAbsolutePath());
-                    log.error("Video playback failed: what=" + what + " extra=" + extra);
+                    skipBadItem("Video playback failed\n\n" + item.file.getAbsolutePath(),
+                            "Video playback failed: what=" + what + " extra=" + extra
+                                    + " file=" + item.file.getAbsolutePath(), null);
                     return true;
                 }
             });
             player.prepareAsync();
         } catch (IOException e) {
-            showError("Could not open video\n\n" + item.file.getAbsolutePath());
-            log.error("Could not open video: " + item.file.getAbsolutePath(), e);
+            skipBadItem("Could not open video\n\n" + item.file.getAbsolutePath(),
+                    "Could not open video: " + item.file.getAbsolutePath(), e);
         } catch (IllegalArgumentException e) {
-            showError("Unsupported video\n\n" + item.file.getAbsolutePath());
-            log.error("Unsupported video: " + item.file.getAbsolutePath(), e);
+            skipBadItem("Unsupported video\n\n" + item.file.getAbsolutePath(),
+                    "Unsupported video: " + item.file.getAbsolutePath(), e);
         } finally {
             surface.release();
         }
+    }
+
+    private void skipBadItem(String userMessage, String logMessage, Throwable throwable) {
+        if (throwable != null) {
+            log.error(logMessage, throwable);
+        } else {
+            log.error(logMessage);
+        }
+        pendingVideoItem = null;
+        releaseMediaPlayer();
+        clearCurrentBitmap();
+        imageView.setVisibility(View.GONE);
+        textureView.setVisibility(View.GONE);
+        consecutivePlaybackFailures++;
+
+        int playlistSize = activePlaylist != null ? activePlaylist.size() : 0;
+        if (playlistSize == 0 || consecutivePlaybackFailures >= playlistSize) {
+            showError(userMessage + "\n\nAll items in the active playlist failed."
+                    + "\nTap the top-left corner 5 times to open Maintenance.");
+            return;
+        }
+
+        errorView.setVisibility(View.GONE);
+        handler.postDelayed(nextRunnable, BAD_ITEM_RETRY_DELAY_MS);
+    }
+
+    private void clearCurrentBitmap() {
+        imageView.setImageDrawable(null);
+        if (currentBitmap != null && !currentBitmap.isRecycled()) {
+            currentBitmap.recycle();
+        }
+        currentBitmap = null;
     }
 
     private void applyVideoTransform(int videoWidth, int videoHeight, String fitMode) {
@@ -976,7 +1054,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         activeSilent = false;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
-        imageView.setImageDrawable(null);
+        clearCurrentBitmap();
         imageView.setVisibility(View.GONE);
         textureView.setVisibility(View.GONE);
         errorView.setText(message);

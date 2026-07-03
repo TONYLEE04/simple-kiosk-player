@@ -29,6 +29,12 @@ Simple Kiosk Player is licensed under the GNU General Public License v3.0 or lat
 ## Tested Android Versions
 
 - Samsung SM-T331C, Android 4.4.2 / API 19: smoke-tested playback, scheduling, sleep/wake behavior, media upload, media previews, and the LAN management editor during the v0.8.0 development cycle.
+- OPPO Find X8 Pro, ColorOS 16: smoke-tested app startup and playback on a newer phone-class device.
+- Huawei DBY-W09, HarmonyOS 4.2.0: smoke-tested app startup and playback on a newer tablet-class device.
+
+Sleep/wake behavior has not been verified on every newer device. Test `screen: "allowSleep"` on the actual deployment device before relying on it, or use `screen: "black"` to keep the backlight policy simple.
+
+Fullscreen and immersive behavior has not been fully verified on phone-style full-screen, cutout, or curved-screen devices. For kiosk deployments, prefer conventional tablet displays unless the target device has been tested.
 
 ## Device Storage Layout
 
@@ -116,6 +122,10 @@ Use `samples/scheduled-config.json` as the starting point for scheduled playback
 If `config.json` changes while the app is running, the app checks the file periodically and reloads a valid config automatically. Invalid hot-reloaded config is logged and ignored so the current playlist can continue running.
 
 
+## First Run Setup
+
+On a new device without `/sdcard/SimpleKiosk/config.json`, the app shows a setup screen instead of a generic error. The hidden maintenance gesture still works on this screen: tap the top-left corner 5 times within 10 seconds, tap `Start LAN`, then open the shown URL from another device on the same Wi-Fi network. Use the LAN page to upload media, create an all-day playlist schedule, and save `config.json`.
+
 ## Local Maintenance View
 
 During playback, tap the top-left corner 5 times within 10 seconds to open the local maintenance view.
@@ -162,11 +172,12 @@ The LAN management page includes a graphical editor for common maintenance tasks
 Current editor scope:
 
 - Shows files from `/sdcard/SimpleKiosk/media/` with thumbnail previews.
-- Uploads JPG, PNG, and MP4 files.
+- Uploads single or multiple JPG, PNG, and MP4 files.
 - Renames media files and updates matching `media/...` references in `config.json`.
 - Deletes unreferenced media files. Referenced files are rejected instead of silently breaking playback.
 - Adds all-day playlist, timed playlist, or silent schedule entries.
 - Edits each playlist schedule's own playlist directly, including reorder, remove, type, image duration, and fit mode.
+- Saves playlist presets in `playlistPresets` and applies them by copying into the selected schedule.
 - Migrates a legacy top-level `playlist` into an all-day `00:00` to `00:00` schedule when opened in the LAN editor.
 - Saves LAN-edited configs without a standalone top-level `playlist`.
 - Saves the updated JSON back to `/sdcard/SimpleKiosk/config.json`.
@@ -179,6 +190,8 @@ After saving, the normal config hot reload path applies the new schedules automa
 LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
 
 Thumbnail previews are served locally by the app. Image files are downsampled before being sent to the browser. MP4 files use a best-effort first-frame preview and fall back to a lightweight placeholder if the old device cannot extract a frame.
+
+`logs/player.log` rotates at 1 MB and keeps one backup at `logs/player.log.1` to avoid unbounded growth during long-running playback.
 
 The LAN management page embeds the official Keep Android Open banner from `keepandroidopen.org` when the browser can reach the public internet. Playback, upload, editing, and local management continue to work if that external script cannot load.
 
@@ -223,8 +236,3 @@ Supported `screen` values:
 `allowSleep` lets Android turn off the LCD backlight according to the system screen timeout. It does not immediately lock the screen and does not require Device Admin permission. When the next non-silent schedule starts, the app tries to wake by relaunching `MainActivity` and restoring `TURN_SCREEN_ON` / `KEEP_SCREEN_ON`.
 
 Use `samples/silent-scheduled-config.json` as the starting point.
-
-
-
-
-

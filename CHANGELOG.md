@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 - 2026-07-04
+
+- Add a first-run setup screen for missing `config.json` that points users to the hidden maintenance gesture.
+- Keep config reload polling active after startup config failures so LAN-created configs can load without restarting.
+- Improve scheduled playback resilience by restarting inactive playlists and skipping bad media items instead of stopping the whole loop.
+- Add explicit bitmap cleanup and out-of-memory handling for image playback.
+- Add log rotation for `/sdcard/SimpleKiosk/logs/player.log` at 1 MB with one backup file.
+- Add LAN playlist presets saved in `config.json` as reusable copy-to-schedule templates.
+- Add queued multi-file upload from the LAN management page.
+- Document newer-device smoke tests and limitations around sleep/wake and fullscreen behavior.
+
 ## 0.8.1 - 2026-07-03
 
 - Add release APK signing configuration and a local keystore properties template.

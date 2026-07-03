@@ -11,6 +11,7 @@ import java.util.Locale;
 
 final class PlayerLog {
     private static final String TAG = "SimpleKiosk";
+    private static final long MAX_LOG_BYTES = 1024L * 1024L;
     private static final SimpleDateFormat DATE_FORMAT =
             new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
 
@@ -46,6 +47,7 @@ final class PlayerLog {
     private synchronized void write(String level, String message, Throwable throwable) {
         FileWriter writer = null;
         try {
+            rotateIfNeeded();
             writer = new FileWriter(logFile, true);
             writer.write(DATE_FORMAT.format(new Date()));
             writer.write(" ");
@@ -68,5 +70,18 @@ final class PlayerLog {
             }
         }
     }
-}
 
+    private void rotateIfNeeded() {
+        if (!logFile.exists() || logFile.length() < MAX_LOG_BYTES) {
+            return;
+        }
+        File backupFile = new File(logFile.getParentFile(), "player.log.1");
+        if (backupFile.exists() && !backupFile.delete()) {
+            Log.e(TAG, "Could not delete old log backup");
+            return;
+        }
+        if (!logFile.renameTo(backupFile)) {
+            Log.e(TAG, "Could not rotate log file");
+        }
+    }
+}
