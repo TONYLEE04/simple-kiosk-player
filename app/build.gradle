@@ -1,7 +1,28 @@
+import java.util.Properties
+
 plugins {
     id 'com.android.application'
 }
 
+def releaseKeystorePropertiesFile = rootProject.file('keystore.properties')
+def releaseKeystoreProperties = new Properties()
+def hasReleaseSigning = false
+
+if (releaseKeystorePropertiesFile.exists()) {
+    releaseKeystorePropertiesFile.withInputStream { stream ->
+        releaseKeystoreProperties.load(stream)
+    }
+    hasReleaseSigning = releaseKeystoreProperties['storeFile']
+            && releaseKeystoreProperties['storePassword']
+            && releaseKeystoreProperties['keyAlias']
+            && releaseKeystoreProperties['keyPassword']
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    if (taskGraph.hasTask(':app:assembleRelease') && !hasReleaseSigning) {
+        throw new GradleException('Missing release signing config. Copy keystore.properties.example to keystore.properties and set storeFile, storePassword, keyAlias, and keyPassword before publishing a release APK.')
+    }
+}
 android {
     namespace 'com.simplekiosk.player'
     compileSdk 19
@@ -18,8 +39,28 @@ android {
         versionCode 9
         versionName '0.8.0'
     }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseKeystoreProperties['storeFile'])
+                storePassword releaseKeystoreProperties['storePassword']
+                keyAlias releaseKeystoreProperties['keyAlias']
+                keyPassword releaseKeystoreProperties['keyPassword']
+            }
+        }
+    }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    buildTypes {
+        release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+        }
+    }
 }
-
-
-
-

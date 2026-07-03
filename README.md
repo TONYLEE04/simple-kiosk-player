@@ -58,6 +58,46 @@ After the APK is built and the device is connected with USB debugging enabled:
 & "D:\Apps Catalog\Android sdks\platform-tools\adb.exe" install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
+## Release APK Signing
+
+Release APKs must be signed with a private Android signing key. Keep this key backed up and private. If the key is lost, future APKs cannot upgrade installs that were signed with the old key.
+
+The project reads release signing values from local `keystore.properties`. This file is ignored by Git. Use `keystore.properties.example` as the template.
+
+Recommended key location:
+
+```text
+C:/Users/Tony Li/Documents/android-keys/simple-kiosk-player.jks
+```
+
+Create the key from PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\Documents\android-keys"
+& "D:\Apps Catalog\Android Studio\jbr\bin\keytool.exe" -genkeypair -v -keystore "$env:USERPROFILE\Documents\android-keys\simple-kiosk-player.jks" -alias simple-kiosk-player -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Then copy `keystore.properties.example` to `keystore.properties` and replace the passwords. Use forward slashes in `storeFile`, for example:
+
+```properties
+storeFile=C:/Users/Tony Li/Documents/android-keys/simple-kiosk-player.jks
+storePassword=your-store-password
+keyAlias=simple-kiosk-player
+keyPassword=your-key-password
+```
+
+Build the signed release APK. `assembleRelease` fails intentionally until `keystore.properties` is present and complete:
+
+```powershell
+$env:JAVA_HOME='D:\Apps Catalog\Android Studio\jbr'
+.\gradlew.bat assembleRelease
+```
+
+The signed APK is written to:
+
+```text
+app/build/outputs/apk/release/app-release.apk
+```
 ## Copy Test Files
 
 ```powershell

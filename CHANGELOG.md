@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add release APK signing configuration and a local keystore properties template.
+
 ## 0.8.0 - 2026-07-03
 
 - Make the LAN editor schedule-first: playlist items are edited inside schedule entries instead of a separate top-level playlist editor.
