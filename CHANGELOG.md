@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.2 - 2026-07-04
+
+- Prevent very long media file names and paths from stretching the LAN media table layout.
+- Add fixed table columns and internal table scrolling so other controls stay usable.
+
 ## 0.10.1 - 2026-07-04
 
 - Replace the media library folder dropdown with a file-manager-style folder sidebar and breadcrumb navigation.
