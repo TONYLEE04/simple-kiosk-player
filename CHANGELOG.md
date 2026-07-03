@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1 - 2026-07-04
+
+- Replace the media library folder dropdown with a file-manager-style folder sidebar and breadcrumb navigation.
+- Make the upload target follow the current folder when the target folder input is left empty.
+- Add a direct "Upload here" action and rename folder batch insertion to "Add current folder".
+
 ## 0.10.0 - 2026-07-04
 
 - Upgrade the LAN media library to a table with search, folder/type/risk filters, pagination, and batch add/delete actions.
