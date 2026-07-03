@@ -117,10 +117,6 @@ Current editor scope:
 - Uploads JPG, PNG, and MP4 files.
 - Renames media files and updates matching `media/...` references in `config.json`.
 - Deletes unreferenced media files. Referenced files are rejected instead of silently breaking playback.
-- Adds media files to the top-level `playlist`.
-- Moves playlist items up and down.
-- Removes playlist items.
-- Sets item `type`, image-only `duration`, and `fitMode`.
 - Adds all-day playlist, timed playlist, or silent schedule entries.
 - Edits each playlist schedule's own playlist directly, including reorder, remove, type, image duration, and fit mode.
 - Migrates a legacy top-level `playlist` into an all-day `00:00` to `00:00` schedule when opened in the LAN editor.
@@ -141,6 +137,19 @@ Thumbnail previews are served locally by the app. Image files are downsampled be
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.
 
 A future LAN-only maintenance page should write the same config file and media directory instead of introducing a separate cloud or account system. This keeps playback offline-first and lets the existing hot reload path apply changes without restarting the app.
+
+## Roadmap
+
+This project will remain offline-first and old-device-friendly. Future work should preserve compatibility with current `/sdcard/SimpleKiosk/` configs and media layouts whenever possible.
+
+Planned directions:
+
+- Compatibility updates for newer Android versions while preserving Android 4.4 / API 19 support where practical.
+- Import and migration helpers for older config formats as the schedule-first editor evolves.
+- More robust LAN maintenance tools, including clearer validation feedback and safer recovery flows.
+- Better media management, including optional preview improvements, bulk operations, and storage usage summaries.
+- More scheduling features, such as date ranges, weekday rules, and reusable schedule templates.
+- Optional device-oriented kiosk controls for deployments that need stricter lock-down behavior.
 
 ## Silent Schedules
 
