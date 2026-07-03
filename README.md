@@ -113,7 +113,7 @@ The LAN management page includes a graphical editor for common maintenance tasks
 
 Current editor scope:
 
-- Shows files from `/sdcard/SimpleKiosk/media/`.
+- Shows files from `/sdcard/SimpleKiosk/media/` with thumbnail previews.
 - Uploads JPG, PNG, and MP4 files.
 - Renames media files and updates matching `media/...` references in `config.json`.
 - Deletes unreferenced media files. Referenced files are rejected instead of silently breaking playback.
@@ -121,7 +121,8 @@ Current editor scope:
 - Moves playlist items up and down.
 - Removes playlist items.
 - Sets item `type`, image-only `duration`, and `fitMode`.
-- Adds and edits basic playlist or silent schedule entries.
+- Adds and edits playlist or silent schedule entries.
+- Edits each playlist schedule's own playlist directly, including reorder, remove, type, image duration, and fit mode.
 - Saves the updated JSON back to `/sdcard/SimpleKiosk/config.json`.
 - Rolls back to `/sdcard/SimpleKiosk/config.json.bak` if the previous save should be restored.
 
@@ -131,7 +132,7 @@ After saving, the normal config hot reload path applies the new playlist automat
 
 LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
 
-Thumbnail preview feasibility: image thumbnails are practical as a future downsampled preview endpoint. Video thumbnails are possible through Android media metadata APIs, but should stay optional because older tablets can fail or stall while probing some MP4 files.
+Thumbnail previews are served locally by the app. Image files are downsampled before being sent to the browser. MP4 files use a best-effort first-frame preview and fall back to a lightweight placeholder if the old device cannot extract a frame.
 
 ## Future Local Network Setup
 

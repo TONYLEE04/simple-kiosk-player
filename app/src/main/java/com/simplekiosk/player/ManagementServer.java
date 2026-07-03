@@ -3,6 +3,7 @@ package com.simplekiosk.player;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -15,6 +16,10 @@ import java.net.Socket;
 import java.net.URLDecoder;
 import java.security.SecureRandom;
 import java.util.Locale;
+
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.media.MediaMetadataRetriever;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -148,6 +153,8 @@ final class ManagementServer {
                 writeText(output, 200, "application/json; charset=utf-8", readTextFile(configFile, 200000));
             } else if ("GET".equals(request.method) && "/media".equals(request.path)) {
                 writeText(output, 200, "text/plain; charset=utf-8", listMediaFiles());
+            } else if ("GET".equals(request.method) && "/media/preview".equals(request.path)) {
+                handleMediaPreview(request, output);
             } else if ("POST".equals(request.method) && "/config".equals(request.path)) {
                 handleSaveConfig(request, input, output);
             } else if ("POST".equals(request.method) && "/config/rollback".equals(request.path)) {
@@ -571,6 +578,113 @@ final class ManagementServer {
                 "Uploaded " + target.getName() + " (" + target.length() + " bytes)\n");
     }
 
+
+    private void handleMediaPreview(HttpRequest request, OutputStream output) throws IOException {
+        String safeName = sanitizeFileName(queryValue(request.query, "name"));
+        if (!isValidMediaRequestName(safeName)) {
+            writePreviewPlaceholder(output, "media");
+            return;
+        }
+        File target = new File(mediaDir, safeName);
+        if (!target.exists() || !target.isFile()) {
+            writePreviewPlaceholder(output, "missing");
+            return;
+        }
+
+        Bitmap bitmap = null;
+        String lower = safeName.toLowerCase(Locale.US);
+        try {
+            if (lower.endsWith(".mp4")) {
+                bitmap = decodeVideoPreview(target);
+            } else {
+                bitmap = decodeImagePreview(target);
+            }
+            if (bitmap == null) {
+                writePreviewPlaceholder(output, lower.endsWith(".mp4") ? "video" : "image");
+                return;
+            }
+            writeBitmapPreview(output, bitmap);
+        } catch (RuntimeException e) {
+            log.error("Could not create media preview: " + safeName, e);
+            writePreviewPlaceholder(output, lower.endsWith(".mp4") ? "video" : "image");
+        } finally {
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+        }
+    }
+
+    private Bitmap decodeImagePreview(File file) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = previewSampleSize(bounds.outWidth, bounds.outHeight);
+        return scalePreview(BitmapFactory.decodeFile(file.getAbsolutePath(), options));
+    }
+
+    private Bitmap decodeVideoPreview(File file) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(file.getAbsolutePath());
+            return scalePreview(retriever.getFrameAtTime(0));
+        } finally {
+            try {
+                retriever.release();
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private int previewSampleSize(int width, int height) {
+        int sampleSize = 1;
+        while ((width / sampleSize) > 360 || (height / sampleSize) > 240) {
+            sampleSize *= 2;
+        }
+        return sampleSize;
+    }
+
+    private Bitmap scalePreview(Bitmap bitmap) {
+        if (bitmap == null) {
+            return null;
+        }
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        if (width <= 0 || height <= 0 || (width <= 360 && height <= 240)) {
+            return bitmap;
+        }
+        float scale = Math.min(360f / width, 240f / height);
+        int targetWidth = Math.max(1, Math.round(width * scale));
+        int targetHeight = Math.max(1, Math.round(height * scale));
+        Bitmap scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true);
+        if (scaled != bitmap) {
+            bitmap.recycle();
+        }
+        return scaled;
+    }
+
+    private void writeBitmapPreview(OutputStream output, Bitmap bitmap) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 78, buffer);
+        writeBytes(output, 200, "image/jpeg", buffer.toByteArray());
+    }
+
+    private void writePreviewPlaceholder(OutputStream output, String label) throws IOException {
+        String body = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"180\" height=\"120\" viewBox=\"0 0 180 120\">"
+                + "<rect width=\"180\" height=\"120\" fill=\"#11161c\"/>"
+                + "<rect x=\"0.5\" y=\"0.5\" width=\"179\" height=\"119\" fill=\"none\" stroke=\"#3d4652\"/>"
+                + "<text x=\"90\" y=\"64\" text-anchor=\"middle\" font-family=\"Arial,sans-serif\" font-size=\"18\" fill=\"#9aa7b2\">"
+                + escapeXml(label) + "</text></svg>";
+        writeText(output, 200, "image/svg+xml; charset=utf-8", body);
+    }
+
+    private String escapeXml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
     private File uniqueTargetFile(String fileName) {
         File target = new File(mediaDir, fileName);
         if (!target.exists()) {
@@ -704,6 +818,21 @@ final class ManagementServer {
         output.write(bytes);
     }
 
+
+    private void writeBytes(OutputStream output, int status, String contentType, byte[] bytes) throws IOException {
+        String reason = status == 200 ? "OK" : status == 400 ? "Bad Request"
+                : status == 403 ? "Forbidden" : status == 404 ? "Not Found"
+                : status == 413 ? "Payload Too Large" : "Error";
+        String headers = "HTTP/1.1 " + status + " " + reason + "\r\n"
+                + "Content-Type: " + contentType + "\r\n"
+                + "Content-Length: " + bytes.length + "\r\n"
+                + "Connection: close\r\n"
+                + "Cache-Control: no-store\r\n"
+                + "\r\n";
+        output.write(headers.getBytes("UTF-8"));
+        output.write(bytes);
+    }
+
     private String buildHomePage() {
         StringBuilder html = new StringBuilder();
         html.append("<!doctype html>\n");
@@ -713,12 +842,13 @@ final class ManagementServer {
         html.append("<style>");
         html.append("body{font-family:Arial,sans-serif;background:#0f1115;color:#e8edf2;margin:0;padding:16px;}");
         html.append("h1{font-size:24px;margin:0 0 14px;color:#fff;}h2{font-size:17px;margin:0 0 10px;color:#f7fafc;}label{display:block;color:#9aa7b2;font-size:12px;margin-bottom:3px;}");
-        html.append(".grid{display:grid;grid-template-columns:minmax(280px,1fr) minmax(360px,1.5fr);gap:12px;}@media(max-width:860px){.grid{grid-template-columns:1fr;}.playlist-row,.schedule-row{grid-template-columns:1fr!important;}}");
+        html.append(".grid{display:grid;grid-template-columns:minmax(300px,1fr) minmax(420px,1.55fr);gap:12px;}@media(max-width:900px){.grid{grid-template-columns:1fr;}.main-playlist-row,.schedule-row,.schedule-playlist-row{grid-template-columns:1fr!important;}}");
         html.append("section{background:#1a1f26;border:1px solid #303842;padding:14px;margin:0 0 12px;box-shadow:0 1px 0 #0a0c0f;}");
-        html.append("button,input,select{font-size:14px;margin:2px;padding:7px;border:1px solid #3d4652;background:#11161c;color:#edf2f7;}button{background:#2b6fd6;color:white;border-color:#2b6fd6;}button.secondary{background:#303944;border-color:#46515f;}button.danger{background:#69343a;border-color:#8c454f;}button:active{filter:brightness(1.15);}");
-        html.append(".media-item,.playlist-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border-top:1px solid #303942;padding:10px 0;}.file-name{font-weight:bold;color:#fff;word-break:break-all;}");
-        html.append(".playlist-row{grid-template-columns:1.45fr .65fr .75fr .75fr auto;}.schedule-row{display:grid;grid-template-columns:1fr .55fr .55fr .75fr .9fr auto;gap:10px;align-items:end;border-top:1px solid #303942;padding:10px 0;}.muted{color:#9aa7b2;font-size:13px;}.pill{display:inline-block;background:#26313b;color:#cbd6df;padding:5px 8px;border:1px solid #3b4652;font-size:13px;}pre{white-space:pre-wrap;overflow:auto;max-height:240px;background:#0d1116;border:1px solid #29313a;padding:10px;}");
-        html.append("progress{width:100%;height:12px;}.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0;}.toolbar-note{color:#a7b4c0;font-size:13px;margin:4px 0 8px;}");
+        html.append("button,input,select{font-size:14px;margin:2px;padding:7px;border:1px solid #3d4652;background:#11161c;color:#edf2f7;}button{background:#2b6fd6;color:white;border-color:#2b6fd6;}button.secondary{background:#303944;border-color:#46515f;}button.danger{background:#69343a;border-color:#8c454f;}button:disabled{opacity:.45;}button:active{filter:brightness(1.15);}");
+        html.append(".media-item,.main-playlist-row,.schedule-playlist-row{display:grid;grid-template-columns:72px 1fr auto;gap:10px;align-items:center;border-top:1px solid #303942;padding:10px 0;}.thumb{width:72px;height:52px;object-fit:cover;background:#11161c;border:1px solid #3d4652;}.file-name{font-weight:bold;color:#fff;word-break:break-all;}");
+        html.append(".main-playlist-row{grid-template-columns:72px 1.3fr .55fr .65fr .65fr auto;}.schedule-playlist-row{grid-template-columns:72px 1.2fr .55fr .65fr .65fr auto;}.schedule-row{display:grid;grid-template-columns:1fr .55fr .55fr .65fr .8fr auto;gap:10px;align-items:end;border-top:1px solid #303942;padding:10px 0;}");
+        html.append(".schedule-card{border-top:1px solid #303942;padding-top:8px;margin-top:8px;}.schedule-card.active{outline:2px solid #2b6fd6;outline-offset:3px;}.muted{color:#9aa7b2;font-size:13px;}.pill{display:inline-block;background:#26313b;color:#cbd6df;padding:5px 8px;border:1px solid #3b4652;font-size:13px;}pre{white-space:pre-wrap;overflow:auto;max-height:240px;background:#0d1116;border:1px solid #29313a;padding:10px;}");
+        html.append("progress{width:100%;height:12px;}.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0;}.toolbar-note{color:#a7b4c0;font-size:13px;margin:4px 0 8px;}.mini-title{font-size:13px;color:#cbd6df;margin:8px 0 4px;}");
         html.append("</style></head><body>");
         html.append("<h1>Simple Kiosk</h1>");
         html.append("<section><h2>Access</h2><div class=\"toolbar-note\">LAN access is protected by the tablet code by default. Disable it only on a trusted local network.</div><div id=\"accessState\"></div><div class=\"bar\"><button class=\"secondary\" onclick=\"setAccess(false)\">Disable protection</button><button class=\"secondary\" onclick=\"setAccess(true)\">Enable protection</button></div></section>");
@@ -734,40 +864,52 @@ final class ManagementServer {
         html.append("<div class=\"toolbar-note\">Edit the top-level playlist. Videos play to completion; duration applies to images only.</div>");
         html.append("<div class=\"bar\"><button onclick=\"saveConfig()\">Save config</button><button class=\"secondary\" onclick=\"reloadConfig()\">Reload config</button><button class=\"secondary\" onclick=\"rollbackConfig()\">Rollback</button><button class=\"secondary\" onclick=\"clearPlaylist()\">Clear playlist</button></div>");
         html.append("<div id=\"playlist\"></div><pre id=\"saveResult\"></pre></section>");
-        html.append("<section><h2>Schedules</h2><div class=\"toolbar-note\">Playlist schedules keep their own playlist if already present; new playlist schedules copy the current top-level playlist.</div><div class=\"bar\"><button onclick=\"addSchedule(\'playlist\')\">Add playlist schedule</button><button class=\"secondary\" onclick=\"addSchedule(\'silent\')\">Add silent schedule</button></div><div id=\"schedules\"></div></section>");
+        html.append("<section><h2>Schedules</h2><div class=\"toolbar-note\">Each playlist schedule has its own editable playlist. Select a schedule, then add media from the library.</div><div class=\"bar\"><button onclick=\"addSchedule('playlist')\">Add playlist schedule</button><button class=\"secondary\" onclick=\"addSchedule('silent')\">Add silent schedule</button></div><div id=\"schedules\"></div></section>");
         html.append("<section><h2>Config preview</h2><pre id=\"config\"></pre></section>");
         html.append("<section><h2>Logs</h2><pre id=\"logs\"></pre></section>");
         html.append("</div></div>");
         html.append("<script>");
-        html.append("var mediaFiles=[];var ACCESS_TOKEN='").append(accessToken).append("';var ACCESS_ON=").append(accessProtectionEnabled ? "true" : "false").append(";var config={version:1,settings:{orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true},playlist:[]};");
+        html.append("var ACCESS_TOKEN='").append(accessToken).append("';var ACCESS_ON=").append(accessProtectionEnabled ? "true" : "false").append(";var config={version:1,settings:{orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true},playlist:[],schedules:[]};");
+        html.append("var mediaFiles=[];var activeSchedule=-1;");
         html.append("function api(u){if(!ACCESS_ON||!ACCESS_TOKEN)return u;return u+(u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ACCESS_TOKEN);}");
-        html.append("function text(u,id){fetch(api(u)).then(function(r){return r.text();}).then(function(t){document.getElementById(id).textContent=t;}).catch(function(e){document.getElementById(id).textContent=e;});}");
+        html.append("function text(u,id){fetch(api(u)).then(r=>r.text()).then(t=>document.getElementById(id).textContent=t).catch(e=>document.getElementById(id).textContent=e);}");
         html.append("function renderAccess(){var el=document.getElementById('accessState');if(el)el.textContent=ACCESS_ON?'Protected. Use the code shown on the tablet.':'Open on the local network.';}");
-        html.append("function setAccess(on){fetch(api(on?'/access/enable':'/access/disable'),{method:'POST'}).then(function(r){return r.text();}).then(function(t){ACCESS_ON=on;renderAccess();document.getElementById('saveResult').textContent=t;}).catch(function(e){document.getElementById('saveResult').textContent=e;});}");
-        html.append("function typeFromName(n){var l=n.toLowerCase();return l.endsWith('.mp4')?'video':'image';}");
-        html.append("function fitOptions(v){var a=['contain','cover','stretch','center'];var s='<select class=fit>';for(var i=0;i<a.length;i++){s+='<option value=\"'+a[i]+'\" '+(a[i]==v?'selected':'')+'>'+a[i]+'</option>';}return s+'</select>';}");
+        html.append("function setAccess(on){fetch(api(on?'/access/enable':'/access/disable'),{method:'POST'}).then(r=>r.text()).then(t=>{ACCESS_ON=on;renderAccess();document.getElementById('saveResult').textContent=t;}).catch(e=>document.getElementById('saveResult').textContent=e);}");
+        html.append("function typeFromName(n){var l=String(n||'').toLowerCase();return l.indexOf('.mp4',l.length-4)>=0?'video':'image';}");
+        html.append("function mediaNameFromFile(file){var v=String(file||'');return v.indexOf('media/')==0?v.substring(6):v;}");
+        html.append("function thumbForFile(file){return api('/media/preview?name='+encodeURIComponent(mediaNameFromFile(file)));}");
+        html.append("function fitOptions(v,cls){var a=['contain','cover','stretch','center'];var s=`<select class=${cls}>`;for(var i=0;i<a.length;i++){s+=`<option value=\"${a[i]}\" ${a[i]==v?'selected':''}>${a[i]}</option>`;}return s+'</select>';}");
+        html.append("function mediaItemFromFile(f){var type=typeFromName(f.name);var item={type:type,file:'media/'+f.name,fitMode:(config.settings&&config.settings.fitMode)||'contain'};if(type=='image')item.duration=8;return item;}");
+        html.append("function copyPlaylist(list){return JSON.parse(JSON.stringify(list||[]));}");
         html.append("function loadAll(){renderAccess();loadMedia();reloadConfig();text('/status','status');text('/logs','logs');}");
-        html.append("function loadMedia(){fetch(api('/media')).then(function(r){return r.text();}).then(function(t){mediaFiles=[];var lines=t.split(/\\n/);for(var i=0;i<lines.length;i++){var p=lines[i].split(/\\t/);if(p.length>=2){mediaFiles.push({name:p[0],size:p[1]});}}renderMedia();});}");
-        html.append("function renderMedia(){var el=document.getElementById('mediaList');if(!mediaFiles.length){el.innerHTML='<div class=muted>No media files</div>';return;}var h='';for(var i=0;i<mediaFiles.length;i++){var f=mediaFiles[i];h+='<div class=media-item><div><div class=\\\"file-name\\\">'+esc(f.name)+'</div><div class=muted>'+esc(f.size)+'</div></div><div><button onclick=\\\"addMedia('+i+')\\\">Add</button><button class=secondary onclick=\\\"renameMedia('+i+')\\\">Rename</button><button class=danger onclick=\\\"deleteMedia('+i+')\\\">Delete</button></div></div>';}el.innerHTML=h;}");
-        html.append("function reloadConfig(){fetch(api('/config')).then(function(r){return r.text();}).then(function(t){try{config=JSON.parse(t);}catch(e){document.getElementById('saveResult').textContent='Could not parse config: '+e;return;}if(!config.playlist){config.playlist=[];}if(!config.schedules){config.schedules=[];}renderPlaylist();renderSchedules();preview();});}");
-        html.append("function mediaPost(url,msgId){fetch(api(url),{method:'POST'}).then(function(r){return r.text().then(function(t){return {ok:r.ok,text:t};});}).then(function(x){document.getElementById(msgId||'mediaResult').textContent=x.text;loadMedia();reloadConfig();}).catch(function(e){document.getElementById(msgId||'mediaResult').textContent=e;});}");
+        html.append("function loadMedia(){fetch(api('/media')).then(r=>r.text()).then(t=>{mediaFiles=[];var lines=t.split(String.fromCharCode(10));for(var i=0;i<lines.length;i++){var p=lines[i].split(String.fromCharCode(9));if(p.length>=2)mediaFiles.push({name:p[0],size:p[1]});}renderMedia();});}");
+        html.append("function renderMedia(){var el=document.getElementById('mediaList');if(!mediaFiles.length){el.innerHTML='<div class=muted>No media files</div>';return;}var h='';for(var i=0;i<mediaFiles.length;i++){var f=mediaFiles[i];var addSchedule=activeSchedule>=0?`<button class=secondary onclick=\"addMediaToSchedule(${i})\">Add schedule</button>`:'<button class=secondary disabled>Add schedule</button>';h+=`<div class=media-item><img class=thumb src=\"${api('/media/preview?name='+encodeURIComponent(f.name))}\"><div><div class=file-name>${esc(f.name)}</div><div class=muted>${esc(f.size)}</div></div><div><button onclick=\"addMedia(${i})\">Add main</button>${addSchedule}<button class=secondary onclick=\"renameMedia(${i})\">Rename</button><button class=danger onclick=\"deleteMedia(${i})\">Delete</button></div></div>`;}el.innerHTML=h;}");
+        html.append("function reloadConfig(){fetch(api('/config')).then(r=>r.text()).then(t=>{try{config=JSON.parse(t);}catch(e){document.getElementById('saveResult').textContent='Could not parse config: '+e;return;}if(!config.playlist)config.playlist=[];if(!config.schedules)config.schedules=[];if(activeSchedule>=config.schedules.length)activeSchedule=-1;renderPlaylist();renderSchedules();renderMedia();preview();});}");
+        html.append("function mediaPost(url,msgId){fetch(api(url),{method:'POST'}).then(r=>r.text().then(t=>({ok:r.ok,text:t}))).then(x=>{document.getElementById(msgId||'mediaResult').textContent=x.text;loadMedia();reloadConfig();}).catch(e=>document.getElementById(msgId||'mediaResult').textContent=e);}");
         html.append("function renameMedia(i){var oldName=mediaFiles[i].name;var name=prompt('New file name',oldName);if(!name||name==oldName)return;mediaPost('/media/rename?from='+encodeURIComponent(oldName)+'&to='+encodeURIComponent(name),'mediaResult');}");
-        html.append("function deleteMedia(i){var name=mediaFiles[i].name;if(!confirm('Delete '+name+'?'))return;mediaPost('/media/delete?name='+encodeURIComponent(name),'mediaResult');}");        html.append("function addMedia(i){var f=mediaFiles[i];var type=typeFromName(f.name);var item={type:type,file:'media/'+f.name,fitMode:(config.settings&&config.settings.fitMode)||'contain'};if(type=='image'){item.duration=8;}config.playlist.push(item);renderPlaylist();preview();}");
-        html.append("function renderPlaylist(){var el=document.getElementById('playlist');if(!config.playlist||!config.playlist.length){el.innerHTML='<div class=muted>No playlist items. Add files from the media library.</div>';return;}var h='';for(var i=0;i<config.playlist.length;i++){var it=config.playlist[i];var isVideo=it.type=='video';var durationCell=isVideo?'<span class=\"pill\">Play to end</span>':'<input class=duration type=\"number\" min=\"1\" value=\"'+(it.duration||8)+'\">';h+='<div class=playlist-row'+' data-i=\"'+i+'\"><div><div class=\"file-name\">'+(i+1)+'. '+esc(it.file||'')+'</div><div class=muted>'+esc(it.type||'')+'</div></div><div><label>Type</label><select class=type onchange=\"collect();renderPlaylist();preview();\"><option value=\"image\" '+(it.type=='image'?'selected':'')+'>image</option><option value=\"video\" '+(it.type=='video'?'selected':'')+'>video</option></select></div><div><label>Duration</label>'+durationCell+'</div><div><label>Fit</label>'+fitOptions(it.fitMode||'contain')+'</div><div><button class=secondary onclick=\"moveItem('+i+',-1)\">Up</button><button class=secondary onclick=\"moveItem('+i+',1)\">Down</button><button class=danger onclick=\"removeItem('+i+')\">Remove</button></div></div>';}el.innerHTML=h;}");
-        html.append("function collect(){var rows=document.querySelectorAll('.playlist-row');var list=[];for(var i=0;i<rows.length;i++){var idx=parseInt(rows[i].getAttribute('data-i'),10);var old=config.playlist[idx];var item={type:rows[i].querySelector('.type').value,file:old.file,fitMode:rows[i].querySelector('.fit').value};if(item.type=='image'){var d=rows[i].querySelector('.duration');item.duration=d?(parseInt(d.value,10)||8):(old.duration||8);}list.push(item);}config.playlist=list;}");
+        html.append("function deleteMedia(i){var name=mediaFiles[i].name;if(!confirm('Delete '+name+'?'))return;mediaPost('/media/delete?name='+encodeURIComponent(name),'mediaResult');}");
+        html.append("function addMedia(i){collect();config.playlist.push(mediaItemFromFile(mediaFiles[i]));renderPlaylist();preview();}");
+        html.append("function addMediaToSchedule(i){collect();collectSchedules();if(activeSchedule<0||!config.schedules[activeSchedule]||config.schedules[activeSchedule].mode=='silent'){document.getElementById('mediaResult').textContent='Select a playlist schedule first';return;}if(!config.schedules[activeSchedule].playlist)config.schedules[activeSchedule].playlist=[];config.schedules[activeSchedule].playlist.push(mediaItemFromFile(mediaFiles[i]));renderSchedules();preview();}");
+        html.append("function renderPlaylist(){var el=document.getElementById('playlist');if(!config.playlist||!config.playlist.length){el.innerHTML='<div class=muted>No playlist items. Add files from the media library.</div>';return;}var h='';for(var i=0;i<config.playlist.length;i++){var it=config.playlist[i];var durationCell=it.type=='video'?'<span class=pill>Play to end</span>':`<input class=duration type=number min=1 value=\"${it.duration||8}\">`;h+=`<div class=main-playlist-row data-i=\"${i}\"><img class=thumb src=\"${thumbForFile(it.file)}\"><div><div class=file-name>${i+1}. ${esc(it.file||'')}</div><div class=muted>${esc(it.type||'')}</div></div><div><label>Type</label><select class=type onchange=\"collect();renderPlaylist();preview();\"><option value=image ${it.type=='image'?'selected':''}>image</option><option value=video ${it.type=='video'?'selected':''}>video</option></select></div><div><label>Duration</label>${durationCell}</div><div><label>Fit</label>${fitOptions(it.fitMode||'contain','fit')}</div><div><button class=secondary onclick=\"moveItem(${i},-1)\">Up</button><button class=secondary onclick=\"moveItem(${i},1)\">Down</button><button class=danger onclick=\"removeItem(${i})\">Remove</button></div></div>`;}el.innerHTML=h;}");
+        html.append("function collect(){var rows=document.querySelectorAll('.main-playlist-row');var list=[];for(var i=0;i<rows.length;i++){var idx=parseInt(rows[i].getAttribute('data-i'),10);var old=config.playlist[idx];var item={type:rows[i].querySelector('.type').value,file:old.file,fitMode:rows[i].querySelector('.fit').value};if(item.type=='image'){var d=rows[i].querySelector('.duration');item.duration=d?(parseInt(d.value,10)||8):(old.duration||8);}list.push(item);}config.playlist=list;}");
         html.append("function moveItem(i,d){collect();var j=i+d;if(j<0||j>=config.playlist.length)return;var t=config.playlist[i];config.playlist[i]=config.playlist[j];config.playlist[j]=t;renderPlaylist();preview();}");
         html.append("function removeItem(i){collect();config.playlist.splice(i,1);renderPlaylist();preview();}");
-        html.append("function copyPlaylist(list){return JSON.parse(JSON.stringify(list||[]));}");
-        html.append("function addSchedule(mode){if(!config.schedules)config.schedules=[];var s={name:mode+'-'+(config.schedules.length+1),start:'08:00',end:'18:00',mode:mode};if(mode=='silent'){s.screen='allowSleep';}else{s.playlist=copyPlaylist(config.playlist);}config.schedules.push(s);renderSchedules();preview();}");
-        html.append("function removeSchedule(i){config.schedules.splice(i,1);renderSchedules();preview();}");
-        html.append("function useTopPlaylistForSchedule(i){collect();collectSchedules();config.schedules[i].playlist=copyPlaylist(config.playlist);config.schedules[i].mode='playlist';renderSchedules();preview();}");
-        html.append("function renderSchedules(){var el=document.getElementById('schedules');var list=config.schedules||[];if(!list.length){el.innerHTML='<div class=muted>No schedules. Default playlist is used all day.</div>';return;}var h='';for(var i=0;i<list.length;i++){var s=list[i];var screen=s.screen||'allowSleep';var mode=s.mode||'playlist';h+='<div class=\"schedule-row\" data-i=\"'+i+'\"><div><label>Name</label><input class=\"sname\" value=\"'+esc(s.name||('schedule-'+(i+1)))+'\" onchange=\"collectSchedules();preview()\"></div><div><label>Start</label><input class=\"sstart\" value=\"'+esc(s.start||'08:00')+'\" onchange=\"collectSchedules();preview()\"></div><div><label>End</label><input class=\"send\" value=\"'+esc(s.end||'18:00')+'\" onchange=\"collectSchedules();preview()\"></div><div><label>Mode</label><select class=\"smode\" onchange=\"collectSchedules();renderSchedules();preview()\"><option value=\"playlist\" '+(mode=='playlist'?'selected':'')+'>playlist</option><option value=\"silent\" '+(mode=='silent'?'selected':'')+'>silent</option></select></div><div><label>Screen</label><select class=\"sscreen\" onchange=\"collectSchedules();preview()\"><option value=\"black\" '+(screen=='black'?'selected':'')+'>black</option><option value=\"allowSleep\" '+(screen=='allowSleep'?'selected':'')+'>allowSleep</option></select></div><div><button class=\"secondary\" onclick=\"useTopPlaylistForSchedule('+i+')\">Use current playlist</button><button class=\"danger\" onclick=\"removeSchedule('+i+')\">Remove</button><div class=muted>'+((s.playlist&&s.playlist.length)||0)+' items</div></div></div>';}el.innerHTML=h;}");
-        html.append("function collectSchedules(){var rows=document.querySelectorAll('.schedule-row');if(!rows.length){if(!config.schedules)config.schedules=[];return;}var list=[];for(var i=0;i<rows.length;i++){var idx=parseInt(rows[i].getAttribute('data-i'),10);var old=config.schedules[idx]||{};var mode=rows[i].querySelector('.smode').value;var s={name:rows[i].querySelector('.sname').value||('schedule-'+(i+1)),start:rows[i].querySelector('.sstart').value||'08:00',end:rows[i].querySelector('.send').value||'18:00',mode:mode};if(mode=='silent'){s.screen=rows[i].querySelector('.sscreen').value||'allowSleep';}else{s.playlist=old.playlist||copyPlaylist(config.playlist);}list.push(s);}config.schedules=list;}");
-        html.append("function rollbackConfig(){if(!confirm('Rollback to config.json.bak?'))return;fetch(api('/config/rollback'),{method:'POST'}).then(function(r){return r.text();}).then(function(t){document.getElementById('saveResult').textContent=t;reloadConfig();}).catch(function(e){document.getElementById('saveResult').textContent=e;});}");        html.append("function clearPlaylist(){config.playlist=[];renderPlaylist();preview();}");
-        html.append("function saveConfig(){collect();collectSchedules();if(!config.version)config.version=1;if(!config.settings)config.settings={orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true};var body=JSON.stringify(config,null,2);fetch(api('/config'),{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(function(r){return r.text().then(function(t){return {ok:r.ok,text:t};});}).then(function(x){document.getElementById('saveResult').textContent=x.text;preview();text('/status','status');}).catch(function(e){document.getElementById('saveResult').textContent=e;});}");
+        html.append("function clearPlaylist(){config.playlist=[];renderPlaylist();preview();}");
+        html.append("function addSchedule(mode){collect();collectSchedules();if(!config.schedules)config.schedules=[];var s={name:mode+'-'+(config.schedules.length+1),start:'08:00',end:'18:00',mode:mode};if(mode=='silent')s.screen='allowSleep';else s.playlist=copyPlaylist(config.playlist);config.schedules.push(s);activeSchedule=mode=='playlist'?config.schedules.length-1:activeSchedule;renderSchedules();renderMedia();preview();}");
+        html.append("function removeSchedule(i){collect();collectSchedules();config.schedules.splice(i,1);if(activeSchedule==i)activeSchedule=-1;else if(activeSchedule>i)activeSchedule--;renderSchedules();renderMedia();preview();}");
+        html.append("function selectSchedule(i){collect();collectSchedules();activeSchedule=i;renderSchedules();renderMedia();preview();}");
+        html.append("function copyMainToSchedule(i){collect();collectSchedules();config.schedules[i].mode='playlist';config.schedules[i].playlist=copyPlaylist(config.playlist);activeSchedule=i;renderSchedules();renderMedia();preview();}");
+        html.append("function clearSchedulePlaylist(i){collect();collectSchedules();config.schedules[i].playlist=[];activeSchedule=i;renderSchedules();preview();}");
+        html.append("function renderSchedulePlaylist(si,s){if((s.mode||'playlist')!='playlist')return '<div class=muted>Silent schedule</div>';var list=s.playlist||[];var h='<div class=mini-title>Playlist</div>';if(!list.length)return h+'<div class=muted>Empty playlist</div>';for(var j=0;j<list.length;j++){var it=list[j];var durationCell=it.type=='video'?'<span class=pill>Play to end</span>':`<input class=sp-duration type=number min=1 value=\"${it.duration||8}\">`;h+=`<div class=schedule-playlist-row data-j=\"${j}\"><img class=thumb src=\"${thumbForFile(it.file)}\"><div><div class=file-name>${j+1}. ${esc(it.file||'')}</div><div class=muted>${esc(it.type||'')}</div></div><div><label>Type</label><select class=sp-type onchange=\"collectSchedules();renderSchedules();preview();\"><option value=image ${it.type=='image'?'selected':''}>image</option><option value=video ${it.type=='video'?'selected':''}>video</option></select></div><div><label>Duration</label>${durationCell}</div><div><label>Fit</label>${fitOptions(it.fitMode||'contain','sp-fit')}</div><div><button class=secondary onclick=\"moveScheduleItem(${si},${j},-1)\">Up</button><button class=secondary onclick=\"moveScheduleItem(${si},${j},1)\">Down</button><button class=danger onclick=\"removeScheduleItem(${si},${j})\">Remove</button></div></div>`;}return h;}");
+        html.append("function renderSchedules(){var el=document.getElementById('schedules');var list=config.schedules||[];if(!list.length){el.innerHTML='<div class=muted>No schedules. Default playlist is used all day.</div>';return;}var h='';for(var i=0;i<list.length;i++){var s=list[i];var screen=s.screen||'allowSleep';var mode=s.mode||'playlist';var active=i==activeSchedule?' active':'';h+=`<div class=\"schedule-card${active}\" data-i=\"${i}\"><div class=schedule-row><div><label>Name</label><input class=sname value=\"${esc(s.name||('schedule-'+(i+1)))}\" onchange=\"collectSchedules();preview()\"></div><div><label>Start</label><input class=sstart value=\"${esc(s.start||'08:00')}\" onchange=\"collectSchedules();preview()\"></div><div><label>End</label><input class=send value=\"${esc(s.end||'18:00')}\" onchange=\"collectSchedules();preview()\"></div><div><label>Mode</label><select class=smode onchange=\"collectSchedules();renderSchedules();renderMedia();preview()\"><option value=playlist ${mode=='playlist'?'selected':''}>playlist</option><option value=silent ${mode=='silent'?'selected':''}>silent</option></select></div><div><label>Screen</label><select class=sscreen onchange=\"collectSchedules();preview()\"><option value=black ${screen=='black'?'selected':''}>black</option><option value=allowSleep ${screen=='allowSleep'?'selected':''}>allowSleep</option></select></div><div><button class=secondary onclick=\"selectSchedule(${i})\">Target</button><button class=secondary onclick=\"copyMainToSchedule(${i})\">Copy main</button><button class=secondary onclick=\"clearSchedulePlaylist(${i})\">Clear</button><button class=danger onclick=\"removeSchedule(${i})\">Remove</button><div class=muted>${((s.playlist&&s.playlist.length)||0)} items</div></div></div>${renderSchedulePlaylist(i,s)}</div>`;}el.innerHTML=h;}");
+        html.append("function collectSchedules(){var cards=document.querySelectorAll('.schedule-card');if(!cards.length){if(!config.schedules)config.schedules=[];return;}var list=[];for(var i=0;i<cards.length;i++){var idx=parseInt(cards[i].getAttribute('data-i'),10);var old=config.schedules[idx]||{};var mode=cards[i].querySelector('.smode').value;var s={name:cards[i].querySelector('.sname').value||('schedule-'+(i+1)),start:cards[i].querySelector('.sstart').value||'08:00',end:cards[i].querySelector('.send').value||'18:00',mode:mode};if(mode=='silent'){s.screen=cards[i].querySelector('.sscreen').value||'allowSleep';}else{var oldList=old.playlist||[];var rows=cards[i].querySelectorAll('.schedule-playlist-row');var plist=[];for(var j=0;j<rows.length;j++){var oldItem=oldList[j]||{};var item={type:rows[j].querySelector('.sp-type').value,file:oldItem.file,fitMode:rows[j].querySelector('.sp-fit').value};if(item.type=='image'){var d=rows[j].querySelector('.sp-duration');item.duration=d?(parseInt(d.value,10)||8):(oldItem.duration||8);}plist.push(item);}s.playlist=plist;}list.push(s);}config.schedules=list;if(activeSchedule>=list.length)activeSchedule=-1;}");
+        html.append("function moveScheduleItem(si,j,d){collect();collectSchedules();var list=config.schedules[si].playlist||[];var k=j+d;if(k<0||k>=list.length)return;var t=list[j];list[j]=list[k];list[k]=t;activeSchedule=si;renderSchedules();preview();}");
+        html.append("function removeScheduleItem(si,j){collect();collectSchedules();config.schedules[si].playlist.splice(j,1);activeSchedule=si;renderSchedules();preview();}");
+        html.append("function rollbackConfig(){if(!confirm('Rollback to config.json.bak?'))return;fetch(api('/config/rollback'),{method:'POST'}).then(r=>r.text()).then(t=>{document.getElementById('saveResult').textContent=t;reloadConfig();}).catch(e=>document.getElementById('saveResult').textContent=e);}");
+        html.append("function saveConfig(){collect();collectSchedules();if(!config.version)config.version=1;if(!config.settings)config.settings={orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true};var body=JSON.stringify(config,null,2);fetch(api('/config'),{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(r=>r.text().then(t=>({ok:r.ok,text:t}))).then(x=>{document.getElementById('saveResult').textContent=x.text;preview();text('/status','status');}).catch(e=>document.getElementById('saveResult').textContent=e);}");
         html.append("function preview(){document.getElementById('config').textContent=JSON.stringify(config,null,2);}");
         html.append("function upload(){var f=document.getElementById('file').files[0];if(!f){alert('Choose a file');return;}var x=new XMLHttpRequest();x.open('POST',api('/upload?name='+encodeURIComponent(f.name)));x.upload.onprogress=function(e){if(e.lengthComputable)document.getElementById('progress').value=e.loaded/e.total*100;};x.onload=function(){document.getElementById('uploadResult').textContent=x.responseText;loadMedia();};x.onerror=function(){document.getElementById('uploadResult').textContent='Upload failed';};x.send(f);}");
-        html.append("function esc(s){return String(s).replace(/[&<>\"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c];});}");
+        html.append("function esc(s){var d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}");
         html.append("loadAll();");
         html.append("</script></body></html>\n");
         return html.toString();

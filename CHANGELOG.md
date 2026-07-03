@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 - 2026-07-03
+
+- Add media preview thumbnails to the LAN management page.
+- Add `GET /media/preview` for downsampled image thumbnails and best-effort MP4 first-frame thumbnails.
+- Let each playlist schedule edit its own playlist directly instead of only copying the top-level playlist.
+- Add a selected schedule target so media library items can be added directly to a schedule playlist.
+- Add per-schedule playlist reorder, remove, type, duration, and fit-mode controls.
+
 ## 0.6.0 - 2026-07-03
 
 - Add LAN schedule editing for playlist and silent schedule entries.
