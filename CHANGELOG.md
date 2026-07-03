@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 - 2026-07-03
 
 - Add release APK signing configuration and a local keystore properties template.
 
