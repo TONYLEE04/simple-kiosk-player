@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 - 2026-07-03
+
+- Make the LAN editor schedule-first: playlist items are edited inside schedule entries instead of a separate top-level playlist editor.
+- Add an all-day playlist schedule option using `00:00` to `00:00`.
+- Migrate legacy top-level `playlist` content into an all-day schedule in the LAN editor when no schedules exist.
+- Save LAN-edited configs without a standalone top-level `playlist`.
+
 ## 0.7.0 - 2026-07-03
 
 - Add media preview thumbnails to the LAN management page.

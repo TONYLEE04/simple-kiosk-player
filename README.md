@@ -61,9 +61,9 @@ After the APK is built and the device is connected with USB debugging enabled:
 
 ## Scheduling
 
-The app supports either a top-level `playlist` or scheduled playlists through `schedules`.
+The runtime still accepts legacy top-level `playlist` configs, but the LAN editor is schedule-first: playlist items are edited inside `schedules`.
 
-Use `samples/scheduled-config.json` as the starting point for scheduled playback. Time values use `HH:mm` in the device local time. Cross-midnight ranges are supported, for example `22:30` to `08:00`.
+Use `samples/scheduled-config.json` as the starting point for scheduled playback. Time values use `HH:mm` in the device local time. Cross-midnight ranges are supported, for example `22:30` to `08:00`. A playlist schedule with `start: "00:00"` and `end: "00:00"` is treated as all-day playback.
 
 If `config.json` changes while the app is running, the app checks the file periodically and reloads a valid config automatically. Invalid hot-reloaded config is logged and ignored so the current playlist can continue running.
 
@@ -121,14 +121,16 @@ Current editor scope:
 - Moves playlist items up and down.
 - Removes playlist items.
 - Sets item `type`, image-only `duration`, and `fitMode`.
-- Adds and edits playlist or silent schedule entries.
+- Adds all-day playlist, timed playlist, or silent schedule entries.
 - Edits each playlist schedule's own playlist directly, including reorder, remove, type, image duration, and fit mode.
+- Migrates a legacy top-level `playlist` into an all-day `00:00` to `00:00` schedule when opened in the LAN editor.
+- Saves LAN-edited configs without a standalone top-level `playlist`.
 - Saves the updated JSON back to `/sdcard/SimpleKiosk/config.json`.
 - Rolls back to `/sdcard/SimpleKiosk/config.json.bak` if the previous save should be restored.
 
 Videos always play to completion. The duration field is shown only for image items.
 
-After saving, the normal config hot reload path applies the new playlist automatically if the config is valid.
+After saving, the normal config hot reload path applies the new schedules automatically if the config is valid.
 
 LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
 
