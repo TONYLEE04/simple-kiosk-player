@@ -6,6 +6,8 @@
 - Add an all-day playlist schedule option using `00:00` to `00:00`.
 - Migrate legacy top-level `playlist` content into an all-day schedule in the LAN editor when no schedules exist.
 - Save LAN-edited configs without a standalone top-level `playlist`.
+- Add the GPL v3-or-later project license.
+- Add the optional official Keep Android Open banner to the LAN management page.
 
 ## 0.7.0 - 2026-07-03
 

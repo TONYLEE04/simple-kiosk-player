@@ -22,6 +22,14 @@ The app targets old Android tablets first:
 - no Compose
 - no Google Play Services
 
+## License
+
+Simple Kiosk Player is licensed under the GNU General Public License v3.0 or later (`GPL-3.0-or-later`). See `LICENSE`.
+
+## Tested Android Versions
+
+- Samsung SM-T331C, Android 4.4.2 / API 19: smoke-tested playback, scheduling, sleep/wake behavior, media upload, media previews, and the LAN management editor during the v0.8.0 development cycle.
+
 ## Device Storage Layout
 
 Create this directory on the Android device:
@@ -131,6 +139,8 @@ After saving, the normal config hot reload path applies the new schedules automa
 LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
 
 Thumbnail previews are served locally by the app. Image files are downsampled before being sent to the browser. MP4 files use a best-effort first-frame preview and fall back to a lightweight placeholder if the old device cannot extract a frame.
+
+The LAN management page embeds the official Keep Android Open banner from `keepandroidopen.org` when the browser can reach the public internet. Playback, upload, editing, and local management continue to work if that external script cannot load.
 
 ## Future Local Network Setup
 

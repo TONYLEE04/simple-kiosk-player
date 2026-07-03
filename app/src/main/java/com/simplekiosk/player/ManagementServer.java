@@ -848,6 +848,8 @@ final class ManagementServer {
         html.append(".muted{color:#9aa7b2;font-size:13px;}.pill{display:inline-block;background:#26313b;color:#cbd6df;padding:5px 8px;border:1px solid #3b4652;font-size:13px;}pre{white-space:pre-wrap;overflow:auto;max-height:240px;background:#0d1116;border:1px solid #29313a;padding:10px;}progress{width:100%;height:12px;}.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0;}.toolbar-note{color:#a7b4c0;font-size:13px;margin:4px 0 8px;}.mini-title{font-size:13px;color:#cbd6df;margin:8px 0 4px;}");
         html.append("</style></head><body>");
         html.append("<h1>Simple Kiosk</h1>");
+        html.append("<div id=\"keepAndroidOpenBanner\"></div>");
+        html.append("<script src=\"https://keepandroidopen.org/banner.js?size=minimal&id=keepAndroidOpenBanner&animation=off\"></script>");
         html.append("<section><h2>Access</h2><div class=\"toolbar-note\">LAN access is protected by the tablet code by default. Disable it only on a trusted local network.</div><div id=\"accessState\"></div><div class=\"bar\"><button class=\"secondary\" onclick=\"setAccess(false)\">Disable protection</button><button class=\"secondary\" onclick=\"setAccess(true)\">Enable protection</button></div></section>");
         html.append("<div class=\"grid\"><div>");
         html.append("<section><h2>Upload media</h2>");
