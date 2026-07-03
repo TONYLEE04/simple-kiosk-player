@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 - 2026-07-04
+
+- Upgrade the LAN media library to a table with search, folder/type/risk filters, pagination, and batch add/delete actions.
+- Support recursive media folders under `/sdcard/SimpleKiosk/media/`, including schedule entries such as `media/A-role/clip.mp4`.
+- Add folder-as-group actions so all matching files in a selected folder can be added to the target schedule.
+- Change `GET /media` to JSON with relative path, folder, type, size, metadata, reference state, and compatibility warnings.
+- Add best-effort media compatibility analysis for dimensions, duration, fps, codec, H.264 level, HEVC/H.265, AV1, 4K-class, and 60fps risk.
+- Skip videos that prepare with `0x0` dimensions instead of leaving the previous frame on screen.
+
 ## 0.9.0 - 2026-07-04
 
 - Add a first-run setup screen for missing `config.json` that points users to the hidden maintenance gesture.

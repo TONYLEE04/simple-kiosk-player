@@ -171,9 +171,11 @@ The LAN management page includes a graphical editor for common maintenance tasks
 
 Current editor scope:
 
-- Shows files from `/sdcard/SimpleKiosk/media/` with thumbnail previews.
-- Uploads single or multiple JPG, PNG, and MP4 files.
-- Renames media files and updates matching `media/...` references in `config.json`.
+- Shows files from `/sdcard/SimpleKiosk/media/` and its subfolders in a searchable, filterable, paginated table.
+- Treats media subfolders as groups, so a folder such as `/media/A-role/` can be added to the target schedule at once.
+- Uploads single or multiple JPG, PNG, and MP4 files, optionally into a target subfolder.
+- Shows best-effort metadata and red compatibility warnings for risky videos such as 4K-class, 60fps, HEVC/H.265, AV1, or high H.264 level files.
+- Renames media files or relative media paths and updates matching `media/...` references in `config.json`.
 - Deletes unreferenced media files. Referenced files are rejected instead of silently breaking playback.
 - Adds all-day playlist, timed playlist, or silent schedule entries.
 - Edits each playlist schedule's own playlist directly, including reorder, remove, type, image duration, and fit mode.
@@ -189,7 +191,9 @@ After saving, the normal config hot reload path applies the new schedules automa
 
 LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
 
-Thumbnail previews are served locally by the app. Image files are downsampled before being sent to the browser. MP4 files use a best-effort first-frame preview and fall back to a lightweight placeholder if the old device cannot extract a frame.
+Thumbnail previews are served locally by the app. Image files are downsampled before being sent to the browser. MP4 files use a best-effort first-frame preview and fall back to a lightweight placeholder if the old device cannot extract a frame. The media table only loads thumbnails for the current page to keep large libraries usable.
+
+Compatibility warnings are advisory. They do not block adding media to schedules, because newer devices may play files that old Android 4.4 tablets cannot. For legacy tablets, prefer MP4 H.264, 720p or 1080p, 30fps, yuv420p, and AAC audio.
 
 `logs/player.log` rotates at 1 MB and keeps one backup at `logs/player.log.1` to avoid unbounded growth during long-running playback.
 

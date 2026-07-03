@@ -945,8 +945,15 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer preparedPlayer) {
+                    int videoWidth = preparedPlayer.getVideoWidth();
+                    int videoHeight = preparedPlayer.getVideoHeight();
+                    if (videoWidth <= 0 || videoHeight <= 0) {
+                        skipBadItem("Unsupported video\n\n" + item.file.getAbsolutePath(),
+                                "Video has no decodable video track: " + item.file.getAbsolutePath(), null);
+                        return;
+                    }
                     consecutivePlaybackFailures = 0;
-                    applyVideoTransform(preparedPlayer.getVideoWidth(), preparedPlayer.getVideoHeight(), item.fitMode);
+                    applyVideoTransform(videoWidth, videoHeight, item.fitMode);
                     preparedPlayer.start();
                 }
             });
