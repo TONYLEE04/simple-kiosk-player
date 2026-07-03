@@ -370,6 +370,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 ? new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(configLastModified))
                 : "unknown");
         appendLine(builder, "Device IP", getDeviceIpAddress());
+        appendLine(builder, "LAN management", getManagementServerStatus());
         appendLine(builder, "Mode", activeSilent ? "silent" : "playback");
         appendLine(builder, "Active playlist", activePlaylistName.length() > 0 ? activePlaylistName : "none");
         appendLine(builder, "Playlist item", activePlaylist != null && !activePlaylist.isEmpty()
@@ -426,7 +427,9 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         if (managementServer == null || !managementServer.isRunning()) {
             return "off";
         }
-        return "on http://" + getDeviceIpAddress() + ":" + managementServer.getPort() + "/";
+        return "on http://" + getDeviceIpAddress() + ":" + managementServer.getPort()
+                + managementServer.getAccessPath() + " code=" + managementServer.getAccessCode()
+                + " protection=" + (managementServer.isAccessProtectionEnabled() ? "on" : "off");
     }
 
     private String getDeviceIpAddress() {
@@ -1016,8 +1019,3 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     public void onSurfaceTextureUpdated(SurfaceTexture surface) {
     }
 }
-
-
-
-
-

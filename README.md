@@ -105,28 +105,34 @@ Uploaded files are saved to:
 /sdcard/SimpleKiosk/media/
 ```
 
-The first LAN page is intentionally small. It can show status, logs, current config, media files, and upload media. Full graphical playlist editing will build on this later.
-
 The LAN service is off by default and stops when the app process exits. It is for trusted local networks only.
 
-## LAN Playlist Editor
+## LAN Management Editor
 
-The LAN management page includes a basic graphical playlist editor.
+The LAN management page includes a graphical editor for common maintenance tasks.
 
 Current editor scope:
 
 - Shows files from `/sdcard/SimpleKiosk/media/`.
+- Uploads JPG, PNG, and MP4 files.
+- Renames media files and updates matching `media/...` references in `config.json`.
+- Deletes unreferenced media files. Referenced files are rejected instead of silently breaking playback.
 - Adds media files to the top-level `playlist`.
 - Moves playlist items up and down.
 - Removes playlist items.
 - Sets item `type`, image-only `duration`, and `fitMode`.
+- Adds and edits basic playlist or silent schedule entries.
 - Saves the updated JSON back to `/sdcard/SimpleKiosk/config.json`.
-
-The editor preserves existing `settings` and `schedules` fields when saving. It only rewrites the top-level `playlist`.
+- Rolls back to `/sdcard/SimpleKiosk/config.json.bak` if the previous save should be restored.
 
 Videos always play to completion. The duration field is shown only for image items.
 
 After saving, the normal config hot reload path applies the new playlist automatically if the config is valid.
+
+LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
+
+Thumbnail preview feasibility: image thumbnails are practical as a future downsampled preview endpoint. Video thumbnails are possible through Android media metadata APIs, but should stay optional because older tablets can fail or stall while probing some MP4 files.
+
 ## Future Local Network Setup
 
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.

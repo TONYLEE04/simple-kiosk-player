@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 - 2026-07-03
+
+- Add LAN schedule editing for playlist and silent schedule entries.
+- Add media rename and delete actions to the LAN media library.
+- Prevent deleting media files that are still referenced by `config.json`.
+- Update config media references automatically when a media file is renamed.
+- Add rollback UI and `POST /config/rollback` for restoring `config.json.bak`.
+- Add default-on LAN access protection with a tablet-shown access code and an optional disable/enable control.
+- Improve LAN management page structure and error feedback for config, media, and access actions.
+- Record thumbnail feasibility: image thumbnails are suitable for a later downsampled endpoint; video thumbnails should remain optional because old tablets may fail or stall during codec probing.
+
 ## 0.5.0 - 2026-07-03
 
 - Add a graphical LAN playlist editor to the management page.
