@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.1 - 2026-07-04
+
+- Fix LAN Access settings form hydration after reopening or reloading the management page.
+- Prevent `management.autoStart` and `management.password` from being overwritten by default form values when saving playlist or schedule changes.
+- Add a Save config button directly in the Access section for a clearer password/auto-start workflow.
 ## 0.11.0 - 2026-07-04
 
 - Add optional `management.autoStart` so sealed devices can start the LAN management server on app launch.
