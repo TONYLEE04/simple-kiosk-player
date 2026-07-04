@@ -58,6 +58,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private static final long BAD_ITEM_RETRY_DELAY_MS = 1000L;
     private static final long VIDEO_SURFACE_RETRY_DELAY_MS = 250L;
     private static final int MAX_VIDEO_SURFACE_RETRIES = 20;
+    private static final long VIDEO_PREPARE_TIMEOUT_MS = 5000L;
+    private static final int MAX_VIDEO_START_RETRIES = 2;
     private static final int OVERRIDE_NONE = 0;
     private static final int OVERRIDE_BLACK = 1;
     private static final int OVERRIDE_ALLOW_SLEEP = 2;
@@ -108,6 +110,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private int playlistIndex = -1;
     private PlaylistItem pendingVideoItem;
     private int videoSurfaceRetryCount;
+    private int videoStartRetryCount;
+    private boolean videoPrepared;
     private Bitmap currentBitmap;
     private int consecutivePlaybackFailures;
     private int manualOverride = OVERRIDE_NONE;
@@ -777,11 +781,26 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             loadAndStart();
             return;
         }
+        resetVideoSurfaceAfterWake();
         if (selectActivePlayback(false, reason)) {
             playNext();
         } else if (!activeSilent && activePlaylist != null && mediaPlayer == null) {
             playNext();
         }
+    }
+
+    private void resetVideoSurfaceAfterWake() {
+        if (manualOverride != OVERRIDE_NONE) {
+            return;
+        }
+        releaseMediaPlayer();
+        pendingVideoItem = null;
+        videoSurfaceRetryCount = 0;
+        videoStartRetryCount = 0;
+        videoPrepared = false;
+        recreateTextureView();
+        textureView.setVisibility(View.GONE);
+        log.info("Reset video surface after wake intent");
     }
 
     private boolean selectActivePlayback(boolean forceReset, String reason) {
@@ -850,6 +869,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         consecutivePlaybackFailures = 0;
         pendingVideoItem = null;
         videoSurfaceRetryCount = 0;
+        videoStartRetryCount = 0;
+        videoPrepared = false;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         clearCurrentBitmap();
@@ -885,6 +906,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         consecutivePlaybackFailures = 0;
         pendingVideoItem = null;
         videoSurfaceRetryCount = 0;
+        videoStartRetryCount = 0;
+        videoPrepared = false;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         clearCurrentBitmap();
@@ -1083,6 +1106,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private void playImage(PlaylistItem item) {
         pendingVideoItem = null;
         videoSurfaceRetryCount = 0;
+        videoStartRetryCount = 0;
+        videoPrepared = false;
         releaseMediaPlayer();
         textureView.setVisibility(View.GONE);
         errorView.setVisibility(View.GONE);
@@ -1201,6 +1226,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             return;
         }
         videoSurfaceRetryCount = 0;
+        videoPrepared = false;
         releaseMediaPlayer();
 
         Surface surface = new Surface(surfaceTexture);
@@ -1223,6 +1249,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                                 "Video has no decodable video track: " + item.file.getAbsolutePath(), null);
                         return;
                     }
+                    videoPrepared = true;
+                    videoStartRetryCount = 0;
                     consecutivePlaybackFailures = 0;
                     applyVideoTransform(videoWidth, videoHeight, item.fitMode);
                     preparedPlayer.start();
@@ -1244,6 +1272,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 }
             });
             player.prepareAsync();
+            scheduleVideoPrepareWatchdog(item, player);
         } catch (IOException e) {
             skipBadItem("Could not open video\n\n" + item.file.getAbsolutePath(),
                     "Could not open video: " + item.file.getAbsolutePath(), e);
@@ -1255,6 +1284,33 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
     }
 
+    private void scheduleVideoPrepareWatchdog(final PlaylistItem item, final MediaPlayer player) {
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (mediaPlayer != player || pendingVideoItem != item || videoPrepared
+                        || activeSilent || manualOverride != OVERRIDE_NONE) {
+                    return;
+                }
+                log.error("Video prepare timed out after wake/start: " + item.file.getAbsolutePath());
+                releaseMediaPlayer();
+                recreateTextureView();
+                if (videoStartRetryCount < MAX_VIDEO_START_RETRIES) {
+                    videoStartRetryCount++;
+                    videoSurfaceRetryCount = 0;
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            requestVideoSurface(item);
+                        }
+                    }, VIDEO_SURFACE_RETRY_DELAY_MS);
+                } else {
+                    skipBadItem("Video prepare timed out\n\n" + item.file.getAbsolutePath(),
+                            "Video prepare timed out: " + item.file.getAbsolutePath(), null);
+                }
+            }
+        }, VIDEO_PREPARE_TIMEOUT_MS);
+    }
     private void skipBadItem(String userMessage, String logMessage, Throwable throwable) {
         if (throwable != null) {
             log.error(logMessage, throwable);
@@ -1263,6 +1319,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
         pendingVideoItem = null;
         videoSurfaceRetryCount = 0;
+        videoStartRetryCount = 0;
+        videoPrepared = false;
         releaseMediaPlayer();
         clearCurrentBitmap();
         imageView.setVisibility(View.GONE);
@@ -1332,6 +1390,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private void showError(String message) {
         activeSilent = false;
         videoSurfaceRetryCount = 0;
+        videoStartRetryCount = 0;
+        videoPrepared = false;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         clearCurrentBitmap();
@@ -1350,6 +1410,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             } catch (RuntimeException ignored) {
             }
             mediaPlayer = null;
+            videoPrepared = false;
         }
     }
 

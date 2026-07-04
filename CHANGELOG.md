@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.3 - 2026-07-04
+
+- Fix wake video recovery when the app is still marked silent during the wake intent. The player now resets the TextureView even when waking from silent mode.
+- Keep the video prepare watchdog from v0.11.2 so stale-but-available Surfaces are retried instead of leaving playback visually stuck.
 ## 0.11.2 - 2026-07-04
 
 - Fix a wake-from-silent video startup race where the screen turns on but TextureView has no ready Surface, leaving playback visually stuck.
