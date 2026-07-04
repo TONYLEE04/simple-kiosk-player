@@ -56,6 +56,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private static final long MAINTENANCE_TAP_WINDOW_MS = 10000L;
     private static final int MANAGEMENT_PORT = 8080;
     private static final long BAD_ITEM_RETRY_DELAY_MS = 1000L;
+    private static final long VIDEO_SURFACE_RETRY_DELAY_MS = 250L;
+    private static final int MAX_VIDEO_SURFACE_RETRIES = 20;
     private static final int OVERRIDE_NONE = 0;
     private static final int OVERRIDE_BLACK = 1;
     private static final int OVERRIDE_ALLOW_SLEEP = 2;
@@ -105,6 +107,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private MediaPlayer mediaPlayer;
     private int playlistIndex = -1;
     private PlaylistItem pendingVideoItem;
+    private int videoSurfaceRetryCount;
     private Bitmap currentBitmap;
     private int consecutivePlaybackFailures;
     private int manualOverride = OVERRIDE_NONE;
@@ -846,6 +849,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         playlistIndex = -1;
         consecutivePlaybackFailures = 0;
         pendingVideoItem = null;
+        videoSurfaceRetryCount = 0;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         clearCurrentBitmap();
@@ -880,6 +884,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         playlistIndex = -1;
         consecutivePlaybackFailures = 0;
         pendingVideoItem = null;
+        videoSurfaceRetryCount = 0;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         clearCurrentBitmap();
@@ -1077,6 +1082,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     private void playImage(PlaylistItem item) {
         pendingVideoItem = null;
+        videoSurfaceRetryCount = 0;
         releaseMediaPlayer();
         textureView.setVisibility(View.GONE);
         errorView.setVisibility(View.GONE);
@@ -1147,12 +1153,54 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         textureView.setVisibility(View.VISIBLE);
 
         pendingVideoItem = item;
+        videoSurfaceRetryCount = 0;
+        requestVideoSurface(item);
+    }
+
+    private void requestVideoSurface(final PlaylistItem item) {
+        if (pendingVideoItem != item || activeSilent || manualOverride != OVERRIDE_NONE) {
+            return;
+        }
+        if (mediaPlayer != null) {
+            return;
+        }
         if (textureView.isAvailable()) {
             startVideo(item, textureView.getSurfaceTexture());
+            return;
         }
+        if (videoSurfaceRetryCount == 0) {
+            log.info("Waiting for video surface before playback: " + item.file.getAbsolutePath());
+        }
+        if (videoSurfaceRetryCount >= MAX_VIDEO_SURFACE_RETRIES) {
+            log.error("Video surface unavailable after wake; recreating TextureView");
+            recreateTextureView();
+            videoSurfaceRetryCount = 0;
+        } else {
+            videoSurfaceRetryCount++;
+        }
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                requestVideoSurface(item);
+            }
+        }, VIDEO_SURFACE_RETRY_DELAY_MS);
+    }
+
+    private void recreateTextureView() {
+        if (textureView != null) {
+            root.removeView(textureView);
+        }
+        textureView = new TextureView(this);
+        textureView.setSurfaceTextureListener(this);
+        textureView.setVisibility(View.VISIBLE);
+        root.addView(textureView, 1, fullScreenParams());
     }
 
     private void startVideo(final PlaylistItem item, SurfaceTexture surfaceTexture) {
+        if (pendingVideoItem != item || activeSilent || manualOverride != OVERRIDE_NONE) {
+            return;
+        }
+        videoSurfaceRetryCount = 0;
         releaseMediaPlayer();
 
         Surface surface = new Surface(surfaceTexture);
@@ -1214,6 +1262,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             log.error(logMessage);
         }
         pendingVideoItem = null;
+        videoSurfaceRetryCount = 0;
         releaseMediaPlayer();
         clearCurrentBitmap();
         imageView.setVisibility(View.GONE);
@@ -1282,6 +1331,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     private void showError(String message) {
         activeSilent = false;
+        videoSurfaceRetryCount = 0;
         handler.removeCallbacks(nextRunnable);
         releaseMediaPlayer();
         clearCurrentBitmap();
@@ -1305,7 +1355,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-        if (pendingVideoItem != null && !activeSilent && manualOverride == OVERRIDE_NONE) {
+        if (pendingVideoItem != null && !activeSilent && manualOverride == OVERRIDE_NONE
+                && mediaPlayer == null) {
             startVideo(pendingVideoItem, surface);
         }
     }
