@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0 - 2026-07-04
+
+- Add optional `management.autoStart` so sealed devices can start the LAN management server on app launch.
+- Add optional local fixed admin password stored in `config.json`, while keeping the existing temporary code flow for default installs.
+- Add LAN Device control actions for apply config now, black screen now, allow sleep now, and resume schedule.
+- Make LAN schedule saves call apply-config automatically so touchless devices apply schedule changes immediately.
+- Keep manual override state runtime-only and higher priority than schedules until Resume schedule is used.
+- Add browser-side strict `HH:mm` validation for schedule start/end fields with clearer guidance.
+
 ## 0.10.2 - 2026-07-04
 
 - Prevent very long media file names and paths from stretching the LAN media table layout.

@@ -16,6 +16,8 @@ final class PlayerConfig {
     boolean keepScreenOn = true;
     boolean hideSystemUi = true;
     boolean mute = true;
+    boolean managementAutoStart = false;
+    String managementPassword = "";
     final List<PlaylistItem> playlist = new ArrayList<PlaylistItem>();
     final List<ScheduleEntry> schedules = new ArrayList<ScheduleEntry>();
 

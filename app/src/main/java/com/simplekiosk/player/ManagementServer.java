@@ -36,6 +36,13 @@ final class ManagementServer {
         String buildStatusTextForManagement();
     }
 
+    interface ControlHandler {
+        String applyConfigNow();
+        String resumeSchedule();
+        String blackScreenNow();
+        String allowSleepNow();
+    }
+
     private static final int SOCKET_TIMEOUT_MS = 30000;
     private static final long MAX_UPLOAD_BYTES = 1024L * 1024L * 1024L;
     private static final long MAX_CONFIG_BYTES = 512L * 1024L;
@@ -48,17 +55,20 @@ final class ManagementServer {
     private final PlayerLog log;
     private final ConfigLoader configLoader;
     private final StatusProvider statusProvider;
+    private final ControlHandler controlHandler;
     private final String accessToken;
     private final MediaInspector mediaInspector = new MediaInspector();
     private final Map<String, CachedMediaInfo> mediaInfoCache = new HashMap<String, CachedMediaInfo>();
 
     private volatile boolean running;
     private volatile boolean accessProtectionEnabled = true;
+    private volatile boolean managementAutoStart;
+    private volatile String fixedPassword = "";
     private ServerSocket serverSocket;
     private Thread serverThread;
 
     ManagementServer(int port, File baseDir, File configFile, File logFile,
-            PlayerLog log, StatusProvider statusProvider) {
+            PlayerLog log, StatusProvider statusProvider, ControlHandler controlHandler) {
         this.port = port;
         this.baseDir = baseDir;
         this.mediaDir = new File(baseDir, "media");
@@ -67,6 +77,7 @@ final class ManagementServer {
         this.log = log;
         this.configLoader = new ConfigLoader(baseDir);
         this.statusProvider = statusProvider;
+        this.controlHandler = controlHandler;
         this.accessToken = makeAccessToken();
     }
 
@@ -117,6 +128,18 @@ final class ManagementServer {
         return accessToken;
     }
 
+    void setManagementConfig(boolean autoStart, String password) {
+        managementAutoStart = autoStart;
+        fixedPassword = password == null ? "" : password.trim();
+    }
+
+    boolean isManagementAutoStart() {
+        return managementAutoStart;
+    }
+
+    String getAccessMode() {
+        return hasFixedPassword() ? "fixed password" : "temporary code";
+    }
     boolean isAccessProtectionEnabled() {
         return accessProtectionEnabled;
     }
@@ -175,6 +198,14 @@ final class ManagementServer {
                 handleSetAccessProtection(false, output);
             } else if ("POST".equals(request.method) && "/access/enable".equals(request.path)) {
                 handleSetAccessProtection(true, output);
+            } else if ("POST".equals(request.method) && "/control/apply-config".equals(request.path)) {
+                handleControl(output, "apply-config");
+            } else if ("POST".equals(request.method) && "/control/resume-schedule".equals(request.path)) {
+                handleControl(output, "resume-schedule");
+            } else if ("POST".equals(request.method) && "/control/black-screen".equals(request.path)) {
+                handleControl(output, "black-screen");
+            } else if ("POST".equals(request.method) && "/control/allow-sleep".equals(request.path)) {
+                handleControl(output, "allow-sleep");
             } else if ("POST".equals(request.method) && "/upload".equals(request.path)) {
                 handleUpload(request, input, output);
             } else {
@@ -328,7 +359,33 @@ final class ManagementServer {
     }
 
     private boolean hasValidAccessToken(HttpRequest request) {
-        return accessToken.equals(queryValue(request.query, "token"));
+        String tokenValue = queryValue(request.query, "token");
+        String passwordValue = queryValue(request.query, "password");
+        if (accessToken.equals(tokenValue) || accessToken.equals(passwordValue)) {
+            return true;
+        }
+        return hasFixedPassword() && fixedPassword.equals(passwordValue);
+    }
+
+    private boolean hasFixedPassword() {
+        return fixedPassword != null && fixedPassword.length() > 0;
+    }
+
+    private void handleControl(OutputStream output, String action) throws IOException {
+        String result;
+        if ("apply-config".equals(action)) {
+            result = controlHandler.applyConfigNow();
+        } else if ("resume-schedule".equals(action)) {
+            result = controlHandler.resumeSchedule();
+        } else if ("black-screen".equals(action)) {
+            result = controlHandler.blackScreenNow();
+        } else if ("allow-sleep".equals(action)) {
+            result = controlHandler.allowSleepNow();
+        } else {
+            writeText(output, 404, "text/plain; charset=utf-8", "Unknown control action\n");
+            return;
+        }
+        writeText(output, 200, "text/plain; charset=utf-8", result + "\n");
     }
 
     private void handleSetAccessProtection(boolean enabled, OutputStream output) throws IOException {
@@ -349,8 +406,8 @@ final class ManagementServer {
                 + "input{background:#11161c;color:#edf2f7;border:1px solid #3d4652;}button{background:#2b6fd6;color:white;border:1px solid #2b6fd6;}"
                 + ".muted{color:#9aa7b2;font-size:13px;line-height:1.4;}</style></head><body>"
                 + "<form method=\"GET\" action=\"/\"><h1>Simple Kiosk</h1>"
-                + "<div class=\"muted\">Enter the access code shown on the tablet maintenance screen.</div>"
-                + "<input name=\"token\" inputmode=\"numeric\" autocomplete=\"off\" autofocus>"
+                + "<div class=\"muted\">Enter the fixed admin password or the temporary code shown on the tablet maintenance screen.</div>"
+                + "<input name=\"password\" inputmode=\"text\" autocomplete=\"off\" autofocus>"
                 + "<button type=\"submit\">Open</button></form></body></html>\n";
     }
 
@@ -1123,7 +1180,8 @@ final class ManagementServer {
         html.append("<h1>Simple Kiosk</h1>");
         html.append("<div id='keepAndroidOpenBanner'></div>");
         html.append("<script src='https://keepandroidopen.org/banner.js?size=minimal&id=keepAndroidOpenBanner&animation=off'></script>");
-        html.append("<section><h2>Access</h2><div class='toolbar-note'>LAN access is protected by the tablet code by default. Disable it only on a trusted local network.</div><div id='accessState'></div><div class='bar'><button class='secondary' onclick='setAccess(false)'>Disable protection</button><button class='secondary' onclick='setAccess(true)'>Enable protection</button></div></section>");
+        html.append("<section><h2>Access</h2><div class='toolbar-note'>LAN access can use the temporary tablet code or a fixed local password stored in config.json for sealed enclosures.</div><div id='accessState'></div><div class='bar'><label><input id='mgmtAutoStart' type='checkbox'> Auto-start LAN</label><label>Fixed password</label><input id='mgmtPassword' autocomplete='off' placeholder='optional local password'><button class='secondary' onclick='setAccess(false)'>Disable protection</button><button class='secondary' onclick='setAccess(true)'>Enable protection</button></div></section>");
+        html.append("<section><h2>Device control</h2><div class='toolbar-note'>These controls are for sealed enclosures where the screen cannot be tapped. Manual override wins over schedules until Resume schedule is used.</div><div class='bar'><button onclick='controlApplyConfig()'>Apply config now</button><button class='secondary' onclick='controlAction(&quot;resume-schedule&quot;)'>Resume schedule</button><button class='secondary' onclick='controlAction(&quot;black-screen&quot;)'>Black screen now</button><button class='secondary' onclick='controlAction(&quot;allow-sleep&quot;)'>Allow sleep now</button></div><pre id='controlResult'></pre></section>");
         html.append("<div class='grid'><div>");
         html.append("<section><h2>Upload media</h2><div class='toolbar-note'>Leave target folder empty to upload into the current folder shown in the media library.</div><label>Target folder</label><input id='uploadFolder' placeholder='Use current folder or type A-role/subset'><div id='uploadFolderHint' class='current-folder'></div><input id='file' type='file' multiple accept='image/png,image/jpeg,video/mp4'><button onclick='upload()'>Upload selected</button><progress id='progress' max='100' value='0'></progress><pre id='uploadResult'></pre></section>");
         html.append("<section><h2>Media library</h2><div class='toolbar-note'>Browse folders like a file manager. High-risk videos are warned but can still be used.</div><div class='media-tools'><div><label>Search</label><input id='mediaSearch' oninput='mediaPage=0;renderMedia()' placeholder='name or folder'></div><div><label>Type</label><select id='mediaType' onchange='mediaPage=0;renderMedia()'><option value='all'>all</option><option value='image'>image</option><option value='video'>video</option></select></div><div><label>Risk</label><select id='mediaRisk' onchange='mediaPage=0;renderMedia()'><option value='all'>all</option><option value='risk'>risk only</option><option value='ok'>ok only</option></select></div><button class='secondary' onclick='loadMedia()'>Refresh</button></div><div class='media-browser'><div><div class='mini-title'>Folders</div><div id='folderTree' class='folder-pane'></div></div><div><div id='mediaBreadcrumb' class='breadcrumb'></div><div class='media-actions'><button class='secondary' onclick='batchAddSelected()'>Add selected</button><button class='secondary' onclick='addCurrentFolderToSchedule()'>Add current folder</button><button class='secondary' onclick='setUploadFolderToCurrent()'>Upload here</button><button class='danger' onclick='batchDeleteSelected()'>Delete selected</button></div><div id='mediaList'></div><div class='pager'><button class='secondary' onclick='mediaPage--;renderMedia()'>Prev</button><span id='mediaPageInfo'></span><button class='secondary' onclick='mediaPage++;renderMedia()'>Next</button></div></div></div><pre id='mediaResult'></pre></section>");
@@ -1133,12 +1191,15 @@ final class ManagementServer {
         html.append("<section><h2>Playlist presets</h2><div class='toolbar-note'>Presets are reusable playlist templates. Applying a preset copies it into the selected schedule.</div><div class='bar'><button class='secondary' onclick='saveActivePlaylistPreset()'>Save target as preset</button></div><div id='presets'></div><pre id='presetResult'></pre></section>");
         html.append("<section><h2>Config preview</h2><pre id='config'></pre></section><section><h2>Logs</h2><pre id='logs'></pre></section>");
         html.append("</div></div><script>");
-        html.append("var ACCESS_TOKEN='").append(accessToken).append("';var ACCESS_ON=").append(accessProtectionEnabled ? "true" : "false").append(";var config=defaultConfig();var mediaFiles=[];var mediaPage=0;var pageSize=25;var activeSchedule=-1;var currentFolder='all';");
-        html.append("function defaultConfig(){return {version:1,settings:{orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true},schedules:[],playlistPresets:[]};}");
+        html.append("var ACCESS_TOKEN='").append(accessToken).append("';var ACCESS_ON=").append(accessProtectionEnabled ? "true" : "false").append(";var ACCESS_MODE='").append(getAccessMode()).append("';var MANAGEMENT_AUTO_START=").append(managementAutoStart ? "true" : "false").append(";var config=defaultConfig();var mediaFiles=[];var mediaPage=0;var pageSize=25;var activeSchedule=-1;var currentFolder='all';");
+        html.append("function defaultConfig(){return {version:1,settings:{orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true},management:{autoStart:false,password:''},schedules:[],playlistPresets:[]};}");
         html.append("function api(u){if(!ACCESS_ON||!ACCESS_TOKEN)return u;return u+(u.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ACCESS_TOKEN);}");
         html.append("function text(u,id){fetch(api(u)).then(r=>r.text()).then(t=>document.getElementById(id).textContent=t).catch(e=>document.getElementById(id).textContent=e);}");
-        html.append("function renderAccess(){var el=document.getElementById('accessState');if(el)el.textContent=ACCESS_ON?'Protected. Use the code shown on the tablet.':'Open on the local network.';}");
+        html.append("function renderAccess(){var el=document.getElementById('accessState');if(el)el.textContent=(ACCESS_ON?'Protected':'Open on local network')+' / access mode: '+ACCESS_MODE+' / LAN auto-start: '+(MANAGEMENT_AUTO_START?'on':'off');var m=config.management||{};var a=document.getElementById('mgmtAutoStart');if(a)a.checked=!!m.autoStart;var p=document.getElementById('mgmtPassword');if(p&&document.activeElement!==p)p.value=m.password||'';}");
         html.append("function setAccess(on){fetch(api(on?'/access/enable':'/access/disable'),{method:'POST'}).then(r=>r.text()).then(t=>{ACCESS_ON=on;renderAccess();document.getElementById('saveResult').textContent=t;}).catch(e=>document.getElementById('saveResult').textContent=e);}");
+        html.append("function controlPostPromise(name){return fetch(api('/control/'+name),{method:'POST'}).then(r=>r.text().then(t=>({ok:r.ok,text:t})));}");
+        html.append("function controlAction(name){var el=document.getElementById('controlResult');if(el)el.textContent='Sending '+name+'...';controlPostPromise(name).then(x=>{if(el)el.textContent=x.text;text('/status','status');text('/logs','logs');}).catch(e=>{if(el)el.textContent=e;});}");
+        html.append("function controlApplyConfig(){controlAction('apply-config');}");
         html.append("function typeFromName(n){var l=String(n||'').toLowerCase();return l.indexOf('.mp4',l.length-4)>=0?'video':'image';}");
         html.append("function mediaNameFromFile(file){var v=String(file||'');return v.indexOf('media/')==0?v.substring(6):v;}");
         html.append("function thumbForFile(file){return api('/media/preview?name='+encodeURIComponent(mediaNameFromFile(file)));}");
@@ -1146,7 +1207,7 @@ final class ManagementServer {
         html.append("function mediaItemFromFile(f){var type=f.type||typeFromName(f.path||f.name);var item={type:type,file:'media/'+(f.path||f.name),fitMode:(config.settings&&config.settings.fitMode)||'contain'};if(type=='image')item.duration=8;return item;}");
         html.append("function copyPlaylist(list){return JSON.parse(JSON.stringify(list||[]));}");
         html.append("function normalizeConfig(){if(!config.schedules)config.schedules=[];if(!config.playlistPresets)config.playlistPresets=[];if(config.playlist&&config.playlist.length&&!config.schedules.length){config.schedules.push({name:'all-day',start:'00:00',end:'00:00',mode:'playlist',playlist:copyPlaylist(config.playlist)});}delete config.playlist;if(activeSchedule>=config.schedules.length)activeSchedule=-1;if(activeSchedule<0){for(var i=0;i<config.schedules.length;i++){if(config.schedules[i].mode!='silent'){activeSchedule=i;break;}}}}");
-        html.append("function loadAll(){renderAccess();loadMedia();reloadConfig();text('/status','status');text('/logs','logs');}");
+        html.append("function loadAll(){loadMedia();reloadConfig();text('/status','status');text('/logs','logs');}");
         html.append("function loadMedia(){fetch(api('/media')).then(r=>r.json()).then(j=>{mediaFiles=j||[];mediaPage=0;renderMedia();}).catch(e=>document.getElementById('mediaResult').textContent=e);}");
         html.append("function folderStats(){var stats={};function ensure(path){if(stats[path])return;var depth=path?path.split('/').length:0;var name=path?path.split('/').pop():'Root';stats[path]={path:path,name:name,count:0,depth:depth};}ensure('');for(var i=0;i<mediaFiles.length;i++){var folder=mediaFiles[i].folder||'';ensure(folder);stats[folder].count++;if(folder){var parts=folder.split('/');var p='';for(var j=0;j<parts.length;j++){p=p?p+'/'+parts[j]:parts[j];ensure(p);}}}var a=[];for(var k in stats)a.push(stats[k]);a.sort(function(x,y){if(x.path=='')return -1;if(y.path=='')return 1;return x.path.localeCompare(y.path);});return a;}");
         html.append("function setFolder(path){currentFolder=path;mediaPage=0;renderMedia();}");
@@ -1174,6 +1235,9 @@ final class ManagementServer {
         html.append("function clearSchedulePlaylist(i){collectSchedules();config.schedules[i].playlist=[];activeSchedule=i;renderSchedules();preview();}");
         html.append("function renderSchedulePlaylist(si,s){if((s.mode||'playlist')=='silent')return '<div class=muted>Silent schedule</div>';var list=s.playlist||[];var h='<div class=mini-title>Playlist</div>';if(!list.length)return h+'<div class=muted>Empty playlist</div>';for(var j=0;j<list.length;j++){var it=list[j];var durationCell=it.type=='video'?'<span class=pill>Play to end</span>':`<input class=sp-duration type=number min=1 value='${it.duration||8}'>`;h+=`<div class=schedule-playlist-row data-j='${j}'><img class=thumb src='${thumbForFile(it.file)}'><div><div class=file-name>${j+1}. ${esc(it.file||'')}</div><div class=muted>${esc(it.type||'')}</div></div><div><label>Type</label><select class=sp-type onchange='collectSchedules();renderSchedules();preview();'><option value=image ${it.type=='image'?'selected':''}>image</option><option value=video ${it.type=='video'?'selected':''}>video</option></select></div><div><label>Duration</label>${durationCell}</div><div><label>Fit</label>${fitOptions(it.fitMode||'contain','sp-fit')}</div><div><button class=secondary onclick='moveScheduleItem(${si},${j},-1)'>Up</button><button class=secondary onclick='moveScheduleItem(${si},${j},1)'>Down</button><button class=danger onclick='removeScheduleItem(${si},${j})'>Remove</button></div></div>`;}return h;}");
         html.append("function renderSchedules(){var el=document.getElementById('schedules');var list=config.schedules||[];if(!list.length){el.innerHTML='<div class=muted>No schedules. Add an all-day playlist schedule for normal playback.</div>';renderPresets();return;}var h='';for(var i=0;i<list.length;i++){var s=list[i];var screen=s.screen||'allowSleep';var mode=s.mode||'playlist';var active=i==activeSchedule?' active':'';h+=`<div class='schedule-card${active}' data-i='${i}'><div class=schedule-row><div><label>Name</label><input class=sname value='${esc(s.name||('schedule-'+(i+1)))}' onchange='collectSchedules();preview()'></div><div><label>Start</label><input class=sstart value='${esc(s.start||'00:00')}' onchange='collectSchedules();preview()'></div><div><label>End</label><input class=send value='${esc(s.end||'00:00')}' onchange='collectSchedules();preview()'></div><div><label>Mode</label><select class=smode onchange='collectSchedules();renderSchedules();renderMedia();preview();'><option value=playlist ${mode=='playlist'?'selected':''}>playlist</option><option value=silent ${mode=='silent'?'selected':''}>silent</option></select></div><div><label>Screen</label><select class=sscreen onchange='collectSchedules();preview()'><option value=black ${screen=='black'?'selected':''}>black</option><option value=allowSleep ${screen=='allowSleep'?'selected':''}>allowSleep</option></select></div><div><button class=secondary onclick='selectSchedule(${i})'>Target</button><button class=secondary onclick='duplicateSchedule(${i})'>Duplicate</button><button class=secondary onclick='clearSchedulePlaylist(${i})'>Clear</button><button class=danger onclick='removeSchedule(${i})'>Remove</button><div class=muted>${((s.playlist&&s.playlist.length)||0)} items</div></div></div>${renderSchedulePlaylist(i,s)}</div>`;}el.innerHTML=h;renderPresets();}");
+        html.append("function collectManagement(){if(!config.management)config.management={};var a=document.getElementById('mgmtAutoStart');var p=document.getElementById('mgmtPassword');config.management.autoStart=!!(a&&a.checked);config.management.password=p?p.value.trim():(config.management.password||'');}");
+        html.append("function isValidTimeText(v){var m=/^(\\d\\d):(\\d\\d)$/.exec(v||'');if(!m)return false;var h=parseInt(m[1],10);var n=parseInt(m[2],10);return h>=0&&h<=23&&n>=0&&n<=59;}");
+        html.append("function validateScheduleTimes(){var list=config.schedules||[];for(var i=0;i<list.length;i++){if(!isValidTimeText(list[i].start)||!isValidTimeText(list[i].end)){document.getElementById('saveResult').textContent='Invalid time in schedule '+(i+1)+'. Use HH:mm, for example 06:00, not 6:00.';return false;}}return true;}");
         html.append("function collectSchedules(){var cards=document.querySelectorAll('.schedule-card');if(!cards.length){if(!config.schedules)config.schedules=[];return;}var list=[];for(var i=0;i<cards.length;i++){var idx=parseInt(cards[i].getAttribute('data-i'),10);var old=config.schedules[idx]||{};var mode=cards[i].querySelector('.smode').value;var s={name:cards[i].querySelector('.sname').value||('schedule-'+(i+1)),start:cards[i].querySelector('.sstart').value||'00:00',end:cards[i].querySelector('.send').value||'00:00',mode:mode};if(mode=='silent'){s.screen=cards[i].querySelector('.sscreen').value||'allowSleep';}else{var oldList=old.playlist||[];var rows=cards[i].querySelectorAll('.schedule-playlist-row');var plist=[];for(var j=0;j<rows.length;j++){var oldItem=oldList[j]||{};var item={type:rows[j].querySelector('.sp-type').value,file:oldItem.file,fitMode:rows[j].querySelector('.sp-fit').value};if(item.type=='image'){var d=rows[j].querySelector('.sp-duration');item.duration=d?(parseInt(d.value,10)||8):(oldItem.duration||8);}plist.push(item);}s.playlist=plist;}list.push(s);}config.schedules=list;if(activeSchedule>=list.length)activeSchedule=-1;}");
         html.append("function renderPresets(){var el=document.getElementById('presets');if(!el)return;var list=config.playlistPresets||[];if(!list.length){el.innerHTML='<div class=muted>No playlist presets</div>';return;}var h='';for(var i=0;i<list.length;i++){var p=list[i];var count=(p.playlist&&p.playlist.length)||0;h+=`<div class=media-item><div></div><div><div class=file-name>${esc(p.name||('preset-'+(i+1)))}</div><div class=muted>${count} items</div></div><div><button class=secondary onclick='applyPreset(${i})'>Apply</button><button class=secondary onclick='renamePreset(${i})'>Rename</button><button class=danger onclick='deletePreset(${i})'>Delete</button></div></div>`;}el.innerHTML=h;}");
         html.append("function saveActivePlaylistPreset(){collectSchedules();if(activeSchedule<0||!config.schedules[activeSchedule]||config.schedules[activeSchedule].mode=='silent'){document.getElementById('presetResult').textContent='Select a playlist schedule first';return;}var list=config.schedules[activeSchedule].playlist||[];if(!list.length){document.getElementById('presetResult').textContent='Target playlist is empty';return;}var name=prompt('Preset name',config.schedules[activeSchedule].name||'playlist');if(!name)return;if(!config.playlistPresets)config.playlistPresets=[];var preset={name:name,playlist:copyPlaylist(list)};var replaced=false;for(var i=0;i<config.playlistPresets.length;i++){if(config.playlistPresets[i].name==name){if(!confirm('Replace preset '+name+'?'))return;config.playlistPresets[i]=preset;replaced=true;break;}}if(!replaced)config.playlistPresets.push(preset);document.getElementById('presetResult').textContent='Saved preset '+name;renderPresets();preview();}");
@@ -1183,7 +1247,7 @@ final class ManagementServer {
         html.append("function moveScheduleItem(si,j,d){collectSchedules();var list=config.schedules[si].playlist||[];var k=j+d;if(k<0||k>=list.length)return;var t=list[j];list[j]=list[k];list[k]=t;activeSchedule=si;renderSchedules();preview();}");
         html.append("function removeScheduleItem(si,j){collectSchedules();config.schedules[si].playlist.splice(j,1);activeSchedule=si;renderSchedules();preview();}");
         html.append("function rollbackConfig(){if(!confirm('Rollback to config.json.bak?'))return;fetch(api('/config/rollback'),{method:'POST'}).then(r=>r.text()).then(t=>{document.getElementById('saveResult').textContent=t;reloadConfig();}).catch(e=>document.getElementById('saveResult').textContent=e);}");
-        html.append("function saveConfig(){collectSchedules();delete config.playlist;if(!config.version)config.version=1;if(!config.settings)config.settings={orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true};if(!config.playlistPresets)config.playlistPresets=[];if(!config.schedules||!config.schedules.length){document.getElementById('saveResult').textContent='Add at least one schedule';return;}var body=JSON.stringify(config,null,2);fetch(api('/config'),{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(r=>r.text().then(t=>({ok:r.ok,text:t}))).then(x=>{document.getElementById('saveResult').textContent=x.text;preview();text('/status','status');}).catch(e=>document.getElementById('saveResult').textContent=e);}");
+        html.append("function saveConfig(){collectSchedules();collectManagement();delete config.playlist;if(!validateScheduleTimes())return;if(!config.version)config.version=1;if(!config.settings)config.settings={orientation:'landscape',fitMode:'contain',background:'#000000',keepScreenOn:true,hideSystemUi:true,mute:true};if(!config.playlistPresets)config.playlistPresets=[];if(!config.schedules||!config.schedules.length){document.getElementById('saveResult').textContent='Add at least one schedule';return;}var body=JSON.stringify(config,null,2);fetch(api('/config'),{method:'POST',headers:{'Content-Type':'application/json'},body:body}).then(r=>r.text().then(t=>({ok:r.ok,text:t}))).then(x=>{document.getElementById('saveResult').textContent=x.text;preview();text('/status','status');if(x.ok){ACCESS_MODE=(config.management&&config.management.password)?'fixed password':'temporary code';MANAGEMENT_AUTO_START=!!(config.management&&config.management.autoStart);renderAccess();controlPostPromise('apply-config').then(y=>{document.getElementById('saveResult').textContent=x.text+y.text;text('/status','status');text('/logs','logs');}).catch(e=>{document.getElementById('saveResult').textContent=x.text+'Apply failed: '+e;});}}).catch(e=>document.getElementById('saveResult').textContent=e);}");
         html.append("function preview(){var c=JSON.parse(JSON.stringify(config));delete c.playlist;document.getElementById('config').textContent=JSON.stringify(c,null,2);}");
         html.append("function upload(){var input=document.getElementById('file');var files=input.files;if(!files||!files.length){alert('Choose files');return;}var folder=(document.getElementById('uploadFolder').value||'').trim();if(!folder&&currentFolder!='all')folder=currentFolder;var progress=document.getElementById('progress');var result=document.getElementById('uploadResult');var ok=[];var fail=[];var i=0;progress.max=files.length;progress.value=0;function next(){if(i>=files.length){result.textContent='Uploaded '+ok.length+' / '+files.length+' files\\n'+ok.join('\\n')+(fail.length?'\\n\\nFailed\\n'+fail.join('\\n'):'');if(folder)currentFolder=folder;loadMedia();input.value='';return;}var f=files[i];result.textContent='Uploading '+(i+1)+' / '+files.length+': '+f.name;var x=new XMLHttpRequest();x.open('POST',api('/upload?name='+encodeURIComponent(f.name)+'&folder='+encodeURIComponent(folder)));x.onload=function(){if(x.status>=200&&x.status<300)ok.push(x.responseText.trim());else fail.push(f.name+': '+x.responseText.trim());i++;progress.value=i;next();};x.onerror=function(){fail.push(f.name+': network error');i++;progress.value=i;next();};x.send(f);}next();}");
         html.append("function esc(s){var d=document.createElement('div');d.textContent=String(s);return d.innerHTML;}");

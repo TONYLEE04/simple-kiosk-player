@@ -163,7 +163,7 @@ Uploaded files are saved to:
 /sdcard/SimpleKiosk/media/
 ```
 
-The LAN service is off by default and stops when the app process exits. It is for trusted local networks only.
+The LAN service is off by default and stops when the app process exits unless `management.autoStart` is enabled in `config.json`. It is for trusted local networks only.
 
 ## LAN Management Editor
 
@@ -182,14 +182,15 @@ Current editor scope:
 - Saves playlist presets in `playlistPresets` and applies them by copying into the selected schedule.
 - Migrates a legacy top-level `playlist` into an all-day `00:00` to `00:00` schedule when opened in the LAN editor.
 - Saves LAN-edited configs without a standalone top-level `playlist`.
+- Validates schedule times before saving and requires strict `HH:mm` values such as `06:00`, not `6:00`.
 - Saves the updated JSON back to `/sdcard/SimpleKiosk/config.json`.
 - Rolls back to `/sdcard/SimpleKiosk/config.json.bak` if the previous save should be restored.
 
 Videos always play to completion. The duration field is shown only for image items.
 
-After saving, the normal config hot reload path applies the new schedules automatically if the config is valid.
+After saving, the LAN page calls `POST /control/apply-config` so touchless devices apply the new schedule immediately. The normal config hot reload path remains as a fallback.
 
-LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. The web page can temporarily disable or re-enable this protection for trusted local networks.
+LAN access protection is on by default while the management server is running. The tablet maintenance view shows a URL with a one-time access code for the current app process. If `management.password` is configured, the login page also accepts that fixed local password. The web page can temporarily disable or re-enable this protection for trusted local networks.
 
 Thumbnail previews are served locally by the app. Image files are downsampled before being sent to the browser. MP4 files use a best-effort first-frame preview and fall back to a lightweight placeholder if the old device cannot extract a frame. The media table only loads thumbnails for the current page to keep large libraries usable.
 
@@ -199,11 +200,35 @@ Compatibility warnings are advisory. They do not block adding media to schedules
 
 The LAN management page embeds the official Keep Android Open banner from `keepandroidopen.org` when the browser can reach the public internet. Playback, upload, editing, and local management continue to work if that external script cannot load.
 
+## Sealed Enclosure Operation
+
+For devices installed in a case where the screen cannot be touched, add an optional `management` block to `/sdcard/SimpleKiosk/config.json`:
+
+```json
+{
+  "management": {
+    "autoStart": true,
+    "password": "123456"
+  }
+}
+```
+
+`autoStart` defaults to `false`. When it is `true`, the app starts the LAN management server after loading a valid config. `password` is optional; if it is missing or empty, access uses the existing temporary code shown on the tablet maintenance screen. The fixed password is stored only in the local config file, not hard-coded into the APK.
+
+The LAN page shows a Device control section for touchless operation:
+
+- `Apply config now`: reload `config.json` and re-evaluate the active schedule immediately.
+- `Black screen now`: highest-priority runtime override that stops playback and shows black.
+- `Allow sleep now`: highest-priority runtime override that stops playback and clears `KEEP_SCREEN_ON` so Android may turn the display off.
+- `Resume schedule`: clears the runtime override and returns to the current schedule.
+
+Manual overrides are not written to `config.json`. Rebooting the app restores normal schedule behavior.
+
 ## Future Local Network Setup
 
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.
 
-A future LAN-only maintenance page should write the same config file and media directory instead of introducing a separate cloud or account system. This keeps playback offline-first and lets the existing hot reload path apply changes without restarting the app.
+LAN maintenance writes the same config file and media directory instead of introducing a separate cloud or account system. This keeps playback offline-first and lets the existing reload path apply changes without restarting the app.
 
 ## Roadmap
 

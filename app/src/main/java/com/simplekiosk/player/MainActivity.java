@@ -17,6 +17,7 @@ import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
@@ -44,7 +45,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener, ManagementServer.StatusProvider {
+public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener,
+        ManagementServer.StatusProvider, ManagementServer.ControlHandler {
     private static final String BASE_DIR_NAME = "SimpleKiosk";
     private static final String ACTION_WAKE_PLAYBACK = "com.simplekiosk.player.WAKE_PLAYBACK";
     private static final int WAKE_ALARM_REQUEST_CODE = 1001;
@@ -54,6 +56,9 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private static final long MAINTENANCE_TAP_WINDOW_MS = 10000L;
     private static final int MANAGEMENT_PORT = 8080;
     private static final long BAD_ITEM_RETRY_DELAY_MS = 1000L;
+    private static final int OVERRIDE_NONE = 0;
+    private static final int OVERRIDE_BLACK = 1;
+    private static final int OVERRIDE_ALLOW_SLEEP = 2;
 
     private final Handler handler = new Handler();
     private final Runnable nextRunnable = new Runnable() {
@@ -102,6 +107,12 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private PlaylistItem pendingVideoItem;
     private Bitmap currentBitmap;
     private int consecutivePlaybackFailures;
+    private int manualOverride = OVERRIDE_NONE;
+    private boolean manualOverrideApplied;
+
+    private interface ControlAction {
+        String run();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -115,7 +126,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         log = new PlayerLog(baseDir);
         configLoader = new ConfigLoader(baseDir);
         managementServer = new ManagementServer(MANAGEMENT_PORT, baseDir,
-                configLoader.getConfigFile(), log.getLogFile(), log, this);
+                configLoader.getConfigFile(), log.getLogFile(), log, this, this);
 
         buildViews();
         loadAndStart();
@@ -365,6 +376,22 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         maintenanceText.setText(buildStatusText());
     }
 
+    private void refreshMaintenanceTextIfVisible() {
+        if (maintenanceVisible && maintenanceText != null) {
+            refreshMaintenanceText();
+        }
+    }
+
+    private String getManualOverrideName() {
+        if (manualOverride == OVERRIDE_BLACK) {
+            return "black screen";
+        }
+        if (manualOverride == OVERRIDE_ALLOW_SLEEP) {
+            return "allow sleep";
+        }
+        return "none";
+    }
+
     private String buildStatusText() {
         StringBuilder builder = new StringBuilder();
         appendLine(builder, "Version", getAppVersionName());
@@ -375,6 +402,11 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 : "unknown");
         appendLine(builder, "Device IP", getDeviceIpAddress());
         appendLine(builder, "LAN management", getManagementServerStatus());
+        appendLine(builder, "LAN auto-start", managementServer != null
+                ? String.valueOf(managementServer.isManagementAutoStart()) : "unknown");
+        appendLine(builder, "LAN access mode", managementServer != null
+                ? managementServer.getAccessMode() : "unknown");
+        appendLine(builder, "Override", getManualOverrideName());
         appendLine(builder, "Mode", activeSilent ? "silent" : "playback");
         appendLine(builder, "Active playlist", activePlaylistName.length() > 0 ? activePlaylistName : "none");
         appendLine(builder, "Playlist item", activePlaylist != null && !activePlaylist.isEmpty()
@@ -425,6 +457,136 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     @Override
     public String buildStatusTextForManagement() {
         return buildStatusText();
+    }
+
+    @Override
+    public String applyConfigNow() {
+        return runControlOnUiThread(new ControlAction() {
+            @Override
+            public String run() {
+                return applyConfigNowOnMain();
+            }
+        });
+    }
+
+    @Override
+    public String resumeSchedule() {
+        return runControlOnUiThread(new ControlAction() {
+            @Override
+            public String run() {
+                return resumeScheduleOnMain();
+            }
+        });
+    }
+
+    @Override
+    public String blackScreenNow() {
+        return runControlOnUiThread(new ControlAction() {
+            @Override
+            public String run() {
+                manualOverride = OVERRIDE_BLACK;
+                manualOverrideApplied = false;
+                applyManualOverride("LAN black screen");
+                refreshMaintenanceTextIfVisible();
+                return "Manual override active: black screen";
+            }
+        });
+    }
+
+    @Override
+    public String allowSleepNow() {
+        return runControlOnUiThread(new ControlAction() {
+            @Override
+            public String run() {
+                manualOverride = OVERRIDE_ALLOW_SLEEP;
+                manualOverrideApplied = false;
+                applyManualOverride("LAN allow sleep");
+                refreshMaintenanceTextIfVisible();
+                return "Manual override active: allow sleep";
+            }
+        });
+    }
+
+    private String runControlOnUiThread(final ControlAction action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return action.run();
+        }
+        final Object lock = new Object();
+        final String[] result = new String[1];
+        final boolean[] done = new boolean[1];
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    result[0] = action.run();
+                } catch (RuntimeException e) {
+                    log.error("LAN control action failed", e);
+                    result[0] = "Control failed: " + e.getMessage();
+                }
+                synchronized (lock) {
+                    done[0] = true;
+                    lock.notifyAll();
+                }
+            }
+        });
+        synchronized (lock) {
+            while (!done[0]) {
+                try {
+                    lock.wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return "Control interrupted";
+                }
+            }
+        }
+        return result[0] != null ? result[0] : "OK";
+    }
+
+    private String applyConfigNowOnMain() {
+        try {
+            PlayerConfig reloadedConfig = configLoader.load();
+            config = reloadedConfig;
+            configLastModified = configLoader.getConfigLastModified();
+            applyConfig();
+            log.info("Applied config from LAN control");
+            if (manualOverride != OVERRIDE_NONE) {
+                manualOverrideApplied = false;
+                applyManualOverride("LAN apply config");
+                refreshMaintenanceTextIfVisible();
+                return "Applied config.json now. Manual override remains: " + getManualOverrideName();
+            }
+            if (selectActivePlayback(true, "LAN apply config")) {
+                playNext();
+            } else if (!activeSilent && activePlaylist != null && !activePlaylist.isEmpty()
+                    && !isPlaybackActive()) {
+                playNext();
+            }
+            refreshMaintenanceTextIfVisible();
+            return "Applied config.json now";
+        } catch (Exception e) {
+            log.error("LAN apply config failed", e);
+            return "Apply config failed: " + e.getMessage();
+        }
+    }
+
+    private String resumeScheduleOnMain() {
+        manualOverride = OVERRIDE_NONE;
+        manualOverrideApplied = false;
+        cancelWakeAlarm();
+        log.info("Manual override cleared from LAN control");
+        if (config == null) {
+            loadAndStart();
+            refreshMaintenanceTextIfVisible();
+            return "Manual override cleared; attempted to load config";
+        }
+        if (selectActivePlayback(true, "LAN resume schedule")) {
+            playNext();
+        } else if (!activeSilent && activePlaylist != null && !activePlaylist.isEmpty()
+                && !isPlaybackActive()) {
+            playNext();
+        }
+        refreshMaintenanceTextIfVisible();
+        return "Resumed schedule";
     }
 
     private String getManagementServerStatus() {
@@ -628,6 +790,13 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             return false;
         }
 
+        if (manualOverride != OVERRIDE_NONE) {
+            if (forceReset || !manualOverrideApplied) {
+                applyManualOverride(reason);
+            }
+            return false;
+        }
+
         Calendar now = Calendar.getInstance();
         ScheduleEntry selectedSchedule = config.getActiveSchedule(now);
         if (selectedSchedule != null && selectedSchedule.isSilent()) {
@@ -702,6 +871,40 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 + " screen=" + schedule.screen);
     }
 
+    private void applyManualOverride(String reason) {
+        boolean allowSleep = manualOverride == OVERRIDE_ALLOW_SLEEP;
+        activePlaylist = null;
+        activeSchedule = null;
+        activePlaylistName = "manual override: " + getManualOverrideName();
+        activeSilent = true;
+        playlistIndex = -1;
+        consecutivePlaybackFailures = 0;
+        pendingVideoItem = null;
+        handler.removeCallbacks(nextRunnable);
+        releaseMediaPlayer();
+        clearCurrentBitmap();
+
+        imageView.setImageDrawable(null);
+        imageView.setVisibility(View.GONE);
+        textureView.setVisibility(View.GONE);
+        errorView.setVisibility(View.GONE);
+        root.setBackgroundColor(0xff000000);
+
+        cancelWakeAlarm();
+        if (allowSleep) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                    | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
+        } else if (config == null || config.keepScreenOn) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+        applySystemUiFlags();
+        manualOverrideApplied = true;
+        log.info("Applied manual override '" + getManualOverrideName() + "' by " + reason);
+    }
     private void applyPlaybackScreenPolicy() {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
@@ -784,6 +987,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     }
 
     private void applyConfig() {
+        applyManagementConfig();
         root.setBackgroundColor(config.backgroundColor);
 
         if ("portrait".equals(config.orientation)) {
@@ -792,11 +996,27 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         }
 
-        if (!activeSilent) {
+        if (!activeSilent && manualOverride == OVERRIDE_NONE) {
             applyPlaybackScreenPolicy();
         }
 
         applySystemUiFlags();
+    }
+
+    private void applyManagementConfig() {
+        if (managementServer == null || config == null) {
+            return;
+        }
+        managementServer.setManagementConfig(config.managementAutoStart, config.managementPassword);
+        if (config.managementAutoStart && !managementServer.isRunning()) {
+            try {
+                managementServer.start();
+                log.info("Auto-started LAN management server from config");
+            } catch (IOException e) {
+                log.error("Could not auto-start LAN management server", e);
+            }
+        }
+        updateManagementButton();
     }
 
     private void applySystemUiFlags() {
@@ -817,6 +1037,9 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     private void playNext() {
         handler.removeCallbacks(nextRunnable);
+        if (manualOverride != OVERRIDE_NONE) {
+            return;
+        }
         releaseMediaPlayer();
 
         if (config == null) {
@@ -1082,14 +1305,15 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-        if (pendingVideoItem != null && !activeSilent) {
+        if (pendingVideoItem != null && !activeSilent && manualOverride == OVERRIDE_NONE) {
             startVideo(pendingVideoItem, surface);
         }
     }
 
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-        if (mediaPlayer != null && pendingVideoItem != null && !activeSilent) {
+        if (mediaPlayer != null && pendingVideoItem != null && !activeSilent
+                && manualOverride == OVERRIDE_NONE) {
             applyVideoTransform(mediaPlayer.getVideoWidth(), mediaPlayer.getVideoHeight(), pendingVideoItem.fitMode);
         }
     }

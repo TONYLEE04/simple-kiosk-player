@@ -46,6 +46,7 @@ final class ConfigLoader {
 
         PlayerConfig config = new PlayerConfig();
         readSettings(root.optJSONObject("settings"), config);
+        readManagement(root.optJSONObject("management"), config);
 
         JSONArray playlist = root.optJSONArray("playlist");
         if (playlist != null) {
@@ -82,6 +83,16 @@ final class ConfigLoader {
                 throw new ConfigException("Invalid background color: " + background);
             }
         }
+    }
+
+
+    private void readManagement(JSONObject management, PlayerConfig config) {
+        if (management == null) {
+            return;
+        }
+        config.managementAutoStart = management.optBoolean("autoStart", config.managementAutoStart);
+        String password = management.optString("password", config.managementPassword);
+        config.managementPassword = password == null ? "" : password.trim();
     }
 
     private void readSchedules(JSONArray schedules, PlayerConfig config) throws JSONException, ConfigException {
