@@ -224,6 +224,8 @@ The LAN page shows a Device control section for touchless operation:
 
 Manual overrides are not written to `config.json`. Rebooting the app restores normal schedule behavior.
 
+If LAN management must remain reachable at any time, prefer `screen: "black"` for silent schedules. `screen: "allowSleep"` saves more power, but Android may slow or suspend CPU and Wi-Fi while the display is off, so the LAN page is not guaranteed to respond until the device is woken, for example by pressing the power button.
+
 ## Future Local Network Setup
 
 The runtime source of truth is still `/sdcard/SimpleKiosk/config.json`.
@@ -263,5 +265,7 @@ Supported `screen` values:
 - `allowSleep`: stop playback, show black, clear `KEEP_SCREEN_ON`, and set an `AlarmManager.RTC_WAKEUP` alarm for the next playback window.
 
 `allowSleep` lets Android turn off the LCD backlight according to the system screen timeout. It does not immediately lock the screen and does not require Device Admin permission. When the next non-silent schedule starts, the app tries to wake by relaunching `MainActivity` and restoring `TURN_SCREEN_ON` / `KEEP_SCREEN_ON`.
+
+For deployments that need reliable LAN maintenance during silent hours, use `screen: "black"` instead. `screen: "allowSleep"` is best treated as a power-saving mode, not an always-online maintenance mode.
 
 Use `samples/silent-scheduled-config.json` as the starting point.

@@ -154,6 +154,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     protected void onResume() {
         super.onResume();
         applySystemUiFlags();
+        resumePlaybackAfterActivityResume();
     }
 
     @Override
@@ -789,6 +790,21 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
     }
 
+
+    private void resumePlaybackAfterActivityResume() {
+        if (config == null) {
+            return;
+        }
+        startPlaybackTimers();
+        if (selectActivePlayback(false, "activity resume")) {
+            playNext();
+        } else if (!activeSilent && activePlaylist != null && !activePlaylist.isEmpty()
+                && !isPlaybackActive()) {
+            log.info("Restarting inactive playlist after activity resume");
+            playNext();
+        }
+    }
+
     private void resetVideoSurfaceAfterWake() {
         if (manualOverride != OVERRIDE_NONE) {
             return;
@@ -1074,12 +1090,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             showError("Config is not loaded");
             return;
         }
-        if (activeSilent) {
-            return;
-        }
-        if (activePlaylist == null || activePlaylist.isEmpty()) {
-            selectActivePlayback(true, "playback");
-        }
+        selectActivePlayback(false, "playback boundary");
         if (activeSilent) {
             return;
         }
